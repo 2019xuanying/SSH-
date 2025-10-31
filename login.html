@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WSS Panel - 登录</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: sans-serif; background-color: #f4f7f6; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+        .container { background: white; padding: 30px; border-radius: 12px; box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1); width: 100%; max-width: 400px; }
+        h1 { text-align: center; color: #1f2937; margin-bottom: 30px; font-weight: 700; font-size: 24px; }
+        input[type=text], input[type=password] { width: 100%; padding: 12px; margin: 10px 0; display: inline-block; border: 1px solid #d1d5db; border-radius: 8px; box-sizing: border-box; transition: all 0.3s; }
+        input[type=text]:focus, input[type=password]:focus { border-color: #4f46e5; outline: 2px solid #a5b4fc; }
+        button { background-color: #4f46e5; color: white; padding: 14px 20px; margin: 15px 0 5px 0; border: none; border-radius: 8px; cursor: pointer; width: 100%; font-size: 16px; font-weight: 600; transition: background-color 0.3s; }
+        button:hover { background-color: #4338ca; }
+        .error { color: #ef4444; background-color: #fee2e2; padding: 10px; border-radius: 6px; text-align: center; margin-bottom: 15px; font-weight: 500; border: 1px solid #fca5a5; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>WSS 管理面板 V2.1</h1>
+        {% if error %}
+            <div class="error">{{ error }}</div>
+        {% endif %}
+        <form method="POST">
+            <label for="username"><b>用户名</b></label>
+            <input type="text" placeholder="输入 {{ ROOT_USERNAME }}" name="username" value="{{ ROOT_USERNAME }}" required>
+
+            <label for="password"><b>密码</b></label>
+            <input type="password" placeholder="输入密码" name="password" required autofocus>
+            
+            <button type="submit">登录</button>
+        </form>
+    </div>
+</body>
+</html>
