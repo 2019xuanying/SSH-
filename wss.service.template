@@ -1,0 +1,22 @@
+[Unit]
+Description=WSS Python Proxy
+After=network.target
+
+[Service]
+Type=simple
+
+ExecStart 传入端口参数: HTTP_PORT, TLS_PORT, INTERNAL_FORWARD_PORT
+
+Environment=WSS_LOG_FILE_ENV=@WSS_LOG_FILE_PATH@
+ExecStart=/usr/bin/python3 @WSS_PROXY_SCRIPT_PATH@ @WSS_HTTP_PORT@ @WSS_TLS_PORT@ @INTERNAL_FORWARD_PORT@
+Restart=on-failure
+User=root
+StandardOutput=journal
+StandardError=journal
+
+新增日志文件权限设置
+
+ExecStartPre=/bin/bash -c "touch @WSS_LOG_FILE_PATH@ && chmod 644 @WSS_LOG_FILE_PATH@"
+
+[Install]
+WantedBy=multi-user.target
