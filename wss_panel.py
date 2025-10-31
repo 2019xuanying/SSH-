@@ -43,7 +43,8 @@ ROOT_HASH_FILE = os.path.join(PANEL_DIR, 'root_hash.txt')
 PANEL_HTML_PATH = os.path.join(PANEL_DIR, 'index.html')
 LOGIN_HTML_PATH = os.path.join(PANEL_DIR, 'login.html') # 新增登录页面路径
 SECRET_KEY_PATH = os.path.join(PANEL_DIR, 'secret_key.txt')
-WSS_LOG_FILE = os.environ.environ.get('WSS_LOG_FILE_ENV', '/var/log/wss.log')
+# 🐞 BUG FIX: 修复 os.environ.environ 导致的 AttributeError (V13 修复)
+WSS_LOG_FILE = os.environ.get('WSS_LOG_FILE_ENV', '/var/log/wss.log')
 
 ROOT_USERNAME = "root"
 GIGA_BYTE = 1024 * 1024 * 1024 # 1 GB in bytes
@@ -358,6 +359,7 @@ def read_and_reset_iptables_counters(username, uid):
         return 0
     
     # 正则表达式匹配 QUOTA_CHAIN 中带有指定 COMMENT 的规则 (查找 bytes 字段)
+    # 修正 V7: 适应 IPTables v1.8.4 的输出格式
     pattern = re.compile(r'^\s*[\d]+\s+([\d]+).*\/\*\s+' + re.escape(comment) + r'\s+\*\/')
     
     current_bytes = 0
@@ -379,7 +381,7 @@ def read_and_reset_iptables_counters(username, uid):
 
 def get_user_current_usage_bytes(username, uid):
     """
-    【废弃：改为调用 read_and_reset_iptables_counters】
+    【废弃：兼容性函数】
     保留此函数名称，但功能已被转移到 read_and_reset_iptables_counters
     """
     # 此函数已不再直接被 sync_user_status 调用，但为了兼容性保留
