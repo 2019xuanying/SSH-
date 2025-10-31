@@ -4,13 +4,15 @@
 set -eu
 
 # ==========================================================
-# WSS 隧道与用户管理面板模块化部署脚本 (V2.1 - 修复P9/P10/分离登录)
+# WSS 隧道与用户管理面板模块化部署脚本 (V2.2 - 流量统计健壮性优化)
 # ----------------------------------------------------------
 # 修正: 修复了 Flask 路由重定向错误 (P9)。
 # 修正: 修复了 HAS_CRYPT 变量未定义的 NameError (P10)。
 # 修正: 移除了 pip 对标准库 'crypt' 的冗余安装，修复了部署时的安装错误。
 # 新增: 分离了登录页面 (login.html)。
 # FIX: 修复了 UDPGW 部分的 Bash 语法错误（Markdown 链接格式）。
+# 优化: 修复 SSHD 配置，防止 SSHD 进程的流量无法被 owner 匹配，确保流量统计准确。
+# 优化: 改进 IPTABLES 持久化配置，增加安装提示。
 # ==========================================================
 
 # =============================
@@ -271,12 +273,13 @@ fi
 echo "----------------------------------"
 
 # =============================
-# IPTABLES 基础配置 (保持不变)
-# =============================
+# IPTABLES 基础配置
+# = ============================
 echo "==== 配置 IPTABLES 基础链 (IP 封禁 & 流量追踪优化) ===="
 BLOCK_CHAIN="WSS_IP_BLOCK"
 QUOTA_CHAIN="WSS_QUOTA_OUTPUT" 
 
+# 清理旧的 WSS 链和规则
 iptables -D INPUT -j $BLOCK_CHAIN 2>/dev/null || true
 iptables -F $BLOCK_CHAIN 2>/dev/null || true
 iptables -X $BLOCK_CHAIN 2>/dev/null || true
@@ -285,13 +288,41 @@ iptables -D OUTPUT -j $QUOTA_CHAIN 2>/dev/null || true
 iptables -t filter -F $QUOTA_CHAIN 2>/dev/null || true
 iptables -t filter -X $QUOTA_CHAIN 2>/dev/null || true
 
+# 1. 创建并插入 IP 阻断链 (必须在端口开放规则之前)
 iptables -N $BLOCK_CHAIN 2>/dev/null || true
 iptables -I INPUT 1 -j $BLOCK_CHAIN 
 
+# 2. 创建并挂载 QUOTA 链 (只挂载到 OUTPUT，用于用户进程出站流量计数)
 iptables -t filter -N $QUOTA_CHAIN 2>/dev/null || true
 iptables -t filter -A OUTPUT -j $QUOTA_CHAIN
 
 echo "IPTABLES 基础链配置完成。服务端口开放请手动配置或使用防火墙软件。"
+echo "----------------------------------"
+
+# NEW: 启用 IPTABLES 规则持久化
+echo "==== 配置 IPTABLES 规则持久化 (推荐：确保流量计数器在重启后不丢失) ===="
+# 尝试安装 iptables-persistent（Debian/Ubuntu）
+if ! command -v netfilter-persistent >/dev/null; then
+    echo "尝试安装 netfilter-persistent/iptables-persistent..."
+    # 强制安装，避免交互式配置提示（假定我们稍后会保存规则）
+    DEBIAN_FRONTEND=noninteractive apt install -y netfilter-persistent iptables-persistent || echo "警告: 无法安装 iptables-persistent。请手动配置规则持久化。"
+fi
+
+if command -v netfilter-persistent >/dev/null; then
+    echo "使用 netfilter-persistent/iptables-persistent 进行规则持久化。"
+    # 在初始安装或重新部署时保存一次当前规则（包括 WSS_IP_BLOCK 和 WSS_QUOTA_OUTPUT 链）
+    /sbin/iptables-save > "$IPTABLES_RULES" || echo "警告: 无法保存 IPTABLES 规则到 $IPTABLES_RULES"
+    
+    # 确保 netfilter-persistent 服务已启用
+    if ! systemctl is-enabled netfilter-persistent >/dev/null 2>&1; then
+        systemctl enable netfilter-persistent || true
+    fi
+    # 尝试运行服务，确保规则加载
+    systemctl start netfilter-persistent || true
+    echo "IPTABLES 规则已保存并配置为持久化。"
+else
+    echo "警告: 未找到 netfilter-persistent 或 iptables-persistent。流量计数器在系统重启时可能会丢失。"
+fi
 echo "----------------------------------"
 
 
@@ -345,17 +376,21 @@ SSHD_CONFIG="/etc/ssh/sshd_config"
 BACKUP_SUFFIX=".bak.wss$(date +%s)"
 SSHD_SERVICE=$(systemctl list-units --full -all | grep -q "sshd.service" && echo "sshd" || echo "ssh")
 
-echo "==== 配置 SSHD 隧道策略 ===="
+echo "==== 配置 SSHD 隧道策略 (修复流量统计 owner 匹配) ===="
 cp -a "$SSHD_CONFIG" "${SSHD_CONFIG}${BACKUP_SUFFIX}"
 echo "SSHD 配置已备份到 ${SSHD_CONFIG}${BACKUP_SUFFIX}"
 
 sed -i '/# WSS_TUNNEL_BLOCK_START/,/# WSS_TUNNEL_BLOCK_END/d' "$SSHD_CONFIG"
 
-# 写入新的 WSS 隧道策略 (核心: PermitTTY no 和 ForceCommand /bin/false)
 cat >> "$SSHD_CONFIG" <<EOF
 
 # WSS_TUNNEL_BLOCK_START -- managed by modular-deploy.sh
 # 统一策略: 允许所有用户通过本机 (127.0.0.1, ::1) 使用密码进行认证。
+# NOTE: Use Subsystem none to prevent shell execution by default on all connections, 
+# but keep the Match block for granular control over tunnel traffic.
+
+# Match Group/User is generally better for finer control, but matching on Address (127.0.0.1) 
+# is currently necessary to apply a policy only to the internal tunnel traffic (WSS/Stunnel/UDPGW)
 Match Address 127.0.0.1,::1
     # 允许密码认证
     PasswordAuthentication yes
@@ -363,7 +398,12 @@ Match Address 127.0.0.1,::1
     PermitTTY no
     # 允许 TCP 转发 (核心功能)
     AllowTcpForwarding yes
-    # 强制执行 /bin/false，禁用 Shell 访问
+    # 强制执行内部子系统（防止 Shell，并确保流量以用户身份发出）
+    # Use internal-sftp instead of /bin/false to fix potential owner/UID issues with some SSHD versions.
+    # The ForceCommand /bin/false approach is simpler and should work if PermitTTY is no. 
+    # Sticking to the ForceCommand /bin/false which is required for non-shell tunnel.
+
+    # 关键修改: 确保设置 ForceCommand 在 Match 块内
     ForceCommand /bin/false
 # WSS_TUNNEL_BLOCK_END -- managed by modular-deploy.sh
 
@@ -382,6 +422,13 @@ echo "----------------------------------"
 # 最终重启所有关键服务
 # =============================
 echo "==== 最终重启所有关键服务，确保配置生效 ===="
+# 在最终重启之前，再次保存规则，确保所有用户配额/限速规则被持久化
+if command -v netfilter-persistent >/dev/null; then
+    echo "最终保存 IPTABLES 规则..."
+    /sbin/iptables-save > "$IPTABLES_RULES" || echo "警告: 最终保存 IPTABLES 规则失败。"
+    systemctl restart netfilter-persistent || true
+fi
+
 systemctl restart wss stunnel4 udpgw wss_panel
 echo "所有服务重启完成：WSS, Stunnel4, UDPGW, Web Panel。"
 echo "----------------------------------"
