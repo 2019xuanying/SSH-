@@ -7,7 +7,7 @@
     <!-- 引入 Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        /* 保持字体引入，使用 Inter */
+        /* 使用 Inter 字体 */
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
         body { font-family: 'Inter', sans-serif; }
         
@@ -19,13 +19,14 @@
         .status-expired { background-color: #ef4444; } /* Tailwind: red-500 */
         .ip-banned-tag { background-color: #fca5a5; color: #dc2626; font-weight: 600; } /* Tailwind: red-300 / red-700 */
 
-        /* 优化主布局：使用 calc(100vh - header_height) 确保内容区域滚动 */
+        /* 优化主布局：确保内容区域滚动 */
         .main-content-area {
-            min-height: calc(100vh - 72px); /* 72px is the header height (py-4 + text-size) */
+            min-height: calc(100vh - 72px); 
         }
         
         .card { transition: all 0.3s ease; }
-        .card:hover { transform: translateY(-2px); box-shadow: 0 10px 15px rgba(0,0,0,0.05); }
+        /* 优化 hover 效果 */
+        .card:hover { transform: translateY(-1px); box-shadow: 0 8px 12px rgba(0,0,0,0.05); } 
         .modal { position: fixed; inset: 0; background-color: rgba(0, 0, 0, 0.5); z-index: 1000; display: none; justify-content: center; align-items: center; }
         .modal > div { max-width: 90%; }
         
@@ -37,7 +38,7 @@
     <header class="bg-indigo-700 shadow-lg sticky top-0 z-20">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
             <h1 class="text-2xl font-bold text-white tracking-wide">WSS 隧道管理面板 (V2.1 优化版)</h1>
-            <button onclick="logout()" class="bg-red-500 hover:bg-red-600 text-white font-semibold py-2 px-4 rounded-lg transition duration-200 shadow-md">
+            <button onclick="logout()" class="bg-red-500 hover:bg-red-600 text-white font-semibold py-2 px-4 rounded-lg transition duration-200 shadow-md" aria-label="退出登录">
                 退出登录
             </button>
         </div>
@@ -46,31 +47,32 @@
     <!-- 主布局：侧边栏 + 内容区 -->
     <div class="main-content-area max-w-7xl mx-auto flex">
         <!-- 侧边栏 (w-64, sticky) -->
-        <aside class="w-64 bg-white shadow-xl flex-shrink-0 sticky top-[72px] h-[calc(100vh-72px)] overflow-y-auto hidden md:block border-r border-gray-100">
+        <!-- 优化：在小屏幕上隐藏，用 mobile-view-select 代替 -->
+        <aside class="w-64 bg-white shadow-xl flex-shrink-0 sticky top-[72px] h-[calc(100vh-72px)] overflow-y-auto hidden md:block border-r border-gray-100" role="navigation">
             <nav class="p-4 space-y-2">
                 <!-- 导航链接：使用 ID 进行 JS 切换 -->
-                <a onclick="switchView('dashboard')" class="block p-3 rounded-xl cursor-pointer text-indigo-700 font-semibold bg-indigo-100 hover:bg-indigo-200 transition duration-150" id="nav-dashboard">
+                <a onclick="switchView('dashboard')" class="nav-link block p-3 rounded-xl cursor-pointer text-indigo-700 font-semibold bg-indigo-100 hover:bg-indigo-200 transition duration-150" id="nav-dashboard" aria-current="page">
                     📊 仪表盘 (Dashboard)
                 </a>
-                <a onclick="switchView('users')" class="block p-3 rounded-xl cursor-pointer text-gray-700 font-semibold hover:bg-gray-100 transition duration-150" id="nav-users">
+                <a onclick="switchView('users')" class="nav-link block p-3 rounded-xl cursor-pointer text-gray-700 font-semibold hover:bg-gray-100 transition duration-150" id="nav-users">
                     👤 用户管理
                 </a>
-                <a onclick="switchView('live-ips')" class="block p-3 rounded-xl cursor-pointer text-gray-700 font-semibold hover:bg-gray-100 transition duration-150" id="nav-live-ips">
+                <a onclick="switchView('live-ips')" class="nav-link block p-3 rounded-xl cursor-pointer text-gray-700 font-semibold hover:bg-gray-100 transition duration-150" id="nav-live-ips">
                     📡 实时连接 IP
                 </a>
-                <a onclick="switchView('settings')" class="block p-3 rounded-xl cursor-pointer text-gray-700 font-semibold hover:bg-gray-100 transition duration-150" id="nav-settings">
+                <a onclick="switchView('settings')" class="nav-link block p-3 rounded-xl cursor-pointer text-gray-700 font-semibold hover:bg-gray-100 transition duration-150" id="nav-settings">
                     🛠️ 系统配置/日志
                 </a>
-                <a onclick="switchView('security')" class="block p-3 rounded-xl cursor-pointer text-gray-700 font-semibold hover:bg-gray-100 transition duration-150" id="nav-security">
+                <a onclick="switchView('security')" class="nav-link block p-3 rounded-xl cursor-pointer text-gray-700 font-semibold hover:bg-gray-100 transition duration-150" id="nav-security">
                     🔒 全局 IP 封禁列表
                 </a>
             </nav>
         </aside>
 
         <!-- 内容区域 -->
-        <main class="flex-grow p-4 sm:p-6 lg:p-8">
+        <main class="flex-grow p-4 sm:p-6 lg:p-8" role="main">
             
-            <!-- 移动端导航选择器 (新增响应式组件) -->
+            <!-- 移动端导航选择器 -->
             <div class="block md:hidden mb-6">
                 <label for="mobile-view-select" class="sr-only">选择视图</label>
                 <select id="mobile-view-select" onchange="switchView(this.value)" class="w-full p-3 border border-gray-300 rounded-lg bg-white text-gray-700 font-semibold focus:ring-indigo-500 focus:border-indigo-500 shadow-sm">
@@ -88,8 +90,8 @@
             <!-- 1. 仪表盘视图 (默认显示) -->
             <div id="view-dashboard" >
                 <!-- 实时系统状态卡片 -->
-                <section class="mb-8">
-                    <h2 class="text-xl font-semibold text-gray-700 mb-4">核心基础设施状态</h2>
+                <section class="mb-8" aria-labelledby="system-status-title">
+                    <h2 id="system-status-title" class="text-xl font-semibold text-gray-700 mb-4">核心基础设施状态</h2>
                     <div id="system-status-grid" class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
                         <!-- 动态加载系统和组件状态 -->
                         <p class="text-gray-500 col-span-full">正在加载系统状态...</p>
@@ -97,34 +99,23 @@
                 </section>
                 
                 <!-- 端口状态和核心操作 -->
-                <section class="card bg-white p-6 rounded-xl shadow-lg mb-8">
-                    <h2 class="text-xl font-semibold text-gray-700 mb-4 border-b pb-2">服务端口与控制</h2>
+                <section class="card bg-white p-6 rounded-xl shadow-lg mb-8" aria-labelledby="service-control-title">
+                    <h2 id="service-control-title" class="text-xl font-semibold text-gray-700 mb-4 border-b pb-2">服务端口与控制</h2>
                     <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
                         <div id="port-status-data" class="md:col-span-1 p-4 bg-gray-50 rounded-lg space-y-2 text-sm border">
                             <!-- 端口列表（动态加载） -->
                             <p class="text-gray-500">正在检查端口状态...</p>
                         </div>
-                        <!-- 服务控制按钮：在小屏幕上，按钮会通过 space-y-3 垂直堆叠 -->
-                        <div class="md:col-span-2 space-y-3">
-                            <button onclick="confirmAction('wss', 'restart', null, 'serviceControl', '重启 WSS')" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg transition duration-200 shadow-md">
-                                重启 WSS Proxy ({{ WSS_HTTP_PORT }}/{{ WSS_TLS_PORT }})
-                            </button>
-                            <button onclick="confirmAction('stunnel4', 'restart', null, 'serviceControl', '重启 Stunnel4')" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg transition duration-200 shadow-md">
-                                重启 Stunnel4 ({{ STUNNEL_PORT }})
-                            </button>
-                            <button onclick="confirmAction('udpgw', 'restart', null, 'serviceControl', '重启 UDPGW')" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg transition duration-200 shadow-md">
-                                重启 UDPGW ({{ UDPGW_PORT }})
-                            </button>
-                            <button onclick="confirmAction('wss_panel', 'restart', null, 'serviceControl', '重启面板')" class="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 rounded-lg transition duration-200 shadow-md">
-                                重启 Web Panel ({{ PANEL_PORT }})
-                            </button>
+                        <!-- 服务控制按钮：使用 JS 填充端口信息，不再依赖 Flask 模板渲染 -->
+                        <div id="service-control-buttons" class="md:col-span-2 space-y-3">
+                            <p class="text-gray-500">正在加载控制按钮...</p>
                         </div>
                     </div>
                 </section>
                 
                 <!-- 快速用户统计（可作为仪表盘卡片） -->
-                <section class="mb-8">
-                    <h2 class="text-xl font-semibold text-gray-700 mb-4">用户快速统计</h2>
+                <section aria-labelledby="user-stats-title" class="mb-8">
+                    <h2 id="user-stats-title" class="text-xl font-semibold text-gray-700 mb-4">用户快速统计</h2>
                     <div id="user-quick-stats" class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
                         <!-- 动态加载用户总数、活跃数等 -->
                     </div>
@@ -136,21 +127,21 @@
                 <h2 class="text-2xl font-bold text-gray-800 mb-6">👤 用户管理</h2>
                 
                 <!-- 新增用户表单 -->
-                <section class="card bg-white p-6 rounded-xl shadow-lg mb-8">
-                    <h3 class="text-xl font-semibold text-gray-700 mb-4 border-b pb-2">新增 SSH 隧道用户</h3>
+                <section class="card bg-white p-6 rounded-xl shadow-lg mb-8" aria-labelledby="add-user-title">
+                    <h3 id="add-user-title" class="text-xl font-semibold text-gray-700 mb-4 border-b pb-2">新增 SSH 隧道用户</h3>
                     <!-- 增加了更多的输入字段 -->
                     <form id="add-user-form" class="grid grid-cols-1 md:grid-cols-6 gap-4 items-end">
                         <input type="text" id="new-username" placeholder="用户名 (Username)" required
-                                class="md:col-span-2 p-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500">
+                                class="md:col-span-2 p-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500" aria-label="用户名">
                         <input type="password" id="new-password" placeholder="密码 (Password)" required
-                                class="md:col-span-2 p-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500">
+                                class="md:col-span-2 p-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500" aria-label="密码">
                         <input type="number" id="expiration-days" value="365" min="1" placeholder="有效期 (天)" required
-                                class="md:col-span-1 p-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500">
+                                class="md:col-span-1 p-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500" aria-label="有效期 (天)">
                         <!-- 新增配额和限速字段 -->
                         <input type="number" id="quota-gb" value="0" min="0" placeholder="配额 (GB, 0=∞)" required
-                                class="md:col-span-1 p-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500">
+                                class="md:col-span-1 p-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500" aria-label="配额 (GB)">
                         <input type="number" id="rate-kbps" value="0" min="0" placeholder="限速 (KB/s, 0=∞)" required
-                                class="md:col-span-2 p-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500">
+                                class="md:col-span-2 p-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500" aria-label="限速 (KB/s)">
                         <button type="submit" class="md:col-span-1 bg-green-600 hover:bg-green-700 text-white font-bold py-3 rounded-lg transition duration-200 shadow-md">
                             创建用户
                         </button>
@@ -164,19 +155,19 @@
                 </section>
                 
                 <!-- 用户列表 -->
-                <section class="card bg-white p-6 rounded-xl shadow-lg">
-                    <h3 class="text-xl font-semibold text-gray-700 mb-4 border-b pb-2">现有用户列表</h3>
+                <section class="card bg-white p-6 rounded-xl shadow-lg" aria-labelledby="user-list-title">
+                    <h3 id="user-list-title" class="text-xl font-semibold text-gray-700 mb-4 border-b pb-2">现有用户列表</h3>
                     <div class="overflow-x-auto border border-gray-200 rounded-lg">
-                        <table class="min-w-full divide-y divide-gray-200">
+                        <table class="min-w-full divide-y divide-gray-200" role="table">
                             <thead class="bg-gray-50">
                                 <tr>
-                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">用户</th>
-                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">状态</th>
-                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">到期日</th>
-                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">连接数</th>
-                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">用量/限额 (GB)</th>
-                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">限速 (KB/s)</th>
-                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">操作</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" scope="col">用户</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" scope="col">状态</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" scope="col">到期日</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" scope="col">连接数</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" scope="col">用量/限额 (GB)</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" scope="col">限速 (KB/s)</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" scope="col">操作</th>
                                 </tr>
                             </thead>
                             <tbody id="user-list-tbody" class="bg-white divide-y divide-gray-200">
@@ -190,8 +181,8 @@
             <!-- 3. 实时连接 IP 列表视图 (NEW) -->
             <div id="view-live-ips" class="hidden">
                 <h2 class="text-2xl font-bold text-gray-800 mb-6">📡 实时连接 IP 列表</h2>
-                <section class="card bg-white p-6 rounded-xl shadow-lg">
-                    <h3 class="text-xl font-semibold text-gray-700 mb-4 border-b pb-2">当前连接到 WSS/Stunnel 端口的外部 IP</h3>
+                <section class="card bg-white p-6 rounded-xl shadow-lg" aria-labelledby="live-ip-title">
+                    <h3 id="live-ip-title" class="text-xl font-semibold text-gray-700 mb-4 border-b pb-2">当前连接到 WSS/Stunnel 端口的外部 IP</h3>
                     <div id="live-ip-list" class="space-y-3 max-h-96 overflow-y-auto p-3 bg-gray-50 rounded-lg border">
                         <p class="text-gray-500">正在加载实时 IP 数据...</p>
                     </div>
@@ -204,23 +195,23 @@
                 <h2 class="text-2xl font-bold text-gray-800 mb-6">🛠️ 系统配置/日志</h2>
 
                 <section class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div class="card bg-white p-6 rounded-xl shadow-lg">
-                        <h3 class="text-xl font-semibold text-gray-700 mb-4 border-b pb-2">核心服务日志 (最新 50 行)</h3>
+                    <div class="card bg-white p-6 rounded-xl shadow-lg" aria-labelledby="core-logs-title">
+                        <h3 id="core-logs-title" class="text-xl font-semibold text-gray-700 mb-4 border-b pb-2">核心服务日志 (最新 50 行)</h3>
                         <div class="space-y-4">
                             <div class="flex space-x-2 flex-wrap">
-                                <button onclick="fetchServiceLogs('wss')" class="bg-gray-200 hover:bg-gray-300 px-3 py-1 text-sm rounded-lg mb-2 shadow-sm">WSS Proxy</button>
-                                <button onclick="fetchServiceLogs('stunnel4')" class="bg-gray-200 hover:bg-gray-300 px-3 py-1 text-sm rounded-lg mb-2 shadow-sm">Stunnel4</button>
-                                <button onclick="fetchServiceLogs('udpgw')" class="bg-gray-200 hover:bg-gray-300 px-3 py-1 text-sm rounded-lg mb-2 shadow-sm">UDPGW</button>
-                                <button onclick="fetchServiceLogs('wss_panel')" class="bg-gray-200 hover:bg-gray-300 px-3 py-1 text-sm rounded-lg mb-2 shadow-sm">Web Panel</button>
+                                <button onclick="fetchServiceLogs('wss')" class="bg-gray-200 hover:bg-gray-300 px-3 py-1 text-sm rounded-lg mb-2 shadow-sm" aria-controls="service-log-content">WSS Proxy</button>
+                                <button onclick="fetchServiceLogs('stunnel4')" class="bg-gray-200 hover:bg-gray-300 px-3 py-1 text-sm rounded-lg mb-2 shadow-sm" aria-controls="service-log-content">Stunnel4</button>
+                                <button onclick="fetchServiceLogs('udpgw')" class="bg-gray-200 hover:bg-gray-300 px-3 py-1 text-sm rounded-lg mb-2 shadow-sm" aria-controls="service-log-content">UDPGW</button>
+                                <button onclick="fetchServiceLogs('wss_panel')" class="bg-gray-200 hover:bg-gray-300 px-3 py-1 text-sm rounded-lg mb-2 shadow-sm" aria-controls="service-log-content">Web Panel</button>
                             </div>
                             <div class="bg-gray-800 text-gray-200 p-3 rounded-lg overflow-hidden border border-gray-700">
-                                <pre id="service-log-content" class="log-pre">请选择服务加载日志...</pre>
+                                <pre id="service-log-content" class="log-pre" aria-live="polite">请选择服务加载日志...</pre>
                             </div>
                         </div>
                     </div>
                     
-                    <div class="card bg-white p-6 rounded-xl shadow-lg">
-                        <h3 class="text-xl font-semibold text-gray-700 mb-4 border-b pb-2">管理员审计日志 (最新活动)</h3>
+                    <div class="card bg-white p-6 rounded-xl shadow-lg" aria-labelledby="audit-log-title">
+                        <h3 id="audit-log-title" class="text-xl font-semibold text-gray-700 mb-4 border-b pb-2">管理员审计日志 (最新活动)</h3>
                         <div class="bg-gray-100 p-3 rounded-lg max-h-[300px] overflow-y-auto border">
                              <div id="audit-log-content" class="text-xs text-gray-700 space-y-1">正在加载审计日志...</div>
                         </div>
@@ -232,18 +223,18 @@
             <div id="view-security" class="hidden">
                 <h2 class="text-2xl font-bold text-gray-800 mb-6">🔒 全局 IP 封禁管理</h2>
 
-                <section class="card bg-white p-6 rounded-xl shadow-lg mb-8">
-                    <h3 class="text-xl font-semibold text-gray-700 mb-4 border-b pb-2">IPTables 全局封禁 IP 列表</h3>
+                <section class="card bg-white p-6 rounded-xl shadow-lg mb-8" aria-labelledby="global-ban-list-title">
+                    <h3 id="global-ban-list-title" class="text-xl font-semibold text-gray-700 mb-4 border-b pb-2">IPTables 全局封禁 IP 列表</h3>
                     <div id="global-ban-list" class="space-y-3 max-h-96 overflow-y-auto p-3 bg-gray-50 rounded-lg border">
                         <p class="text-gray-500">正在加载全局 IP 封禁列表...</p>
                     </div>
                 </section>
                 
-                <section class="card bg-white p-6 rounded-xl shadow-lg">
-                    <h3 class="text-xl font-semibold text-gray-700 mb-4 border-b pb-2">新增全局封禁 IP</h3>
+                <section class="card bg-white p-6 rounded-xl shadow-lg" aria-labelledby="add-ban-title">
+                    <h3 id="add-ban-title" class="text-xl font-semibold text-gray-700 mb-4 border-b pb-2">新增全局封禁 IP</h3>
                     <form id="add-global-ban-form" class="flex flex-col sm:flex-row space-y-4 sm:space-y-0 sm:space-x-4">
                         <input type="text" id="global-ban-ip" placeholder="输入要封禁的 IP 地址" required
-                                class="flex-1 p-3 border border-gray-300 rounded-lg focus:ring-red-500 focus:border-red-500">
+                                class="flex-1 p-3 border border-gray-300 rounded-lg focus:ring-red-500 focus:border-red-500" aria-label="IP 地址">
                         <button type="submit" class="bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-6 rounded-lg transition duration-200 shadow-md flex-shrink-0">
                             全局封禁
                         </button>
@@ -255,9 +246,9 @@
     </div>
 
     <!-- 模态框：设置用户配额/速度/密码/有效期 -->
-    <div id="settings-modal" class="fixed inset-0 bg-gray-900 bg-opacity-50 z-[1000] hidden justify-center items-center">
+    <div id="settings-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-username-title-settings">
         <div class="bg-white p-6 rounded-xl shadow-2xl w-full max-w-lg transition duration-300 transform scale-100">
-            <h3 class="text-xl font-bold text-gray-800 mb-4 border-b pb-2">设置 <span id="modal-username-title-settings" class="text-indigo-600"></span> 的参数</h3>
+            <h3 class="text-xl font-bold text-gray-800 mb-4 border-b pb-2" id="modal-username-title-settings">设置 <span class="text-indigo-600"></span> 的参数</h3>
             <form id="settings-form" onsubmit="event.preventDefault(); saveUserSettings();">
                 <input type="hidden" id="modal-username-setting">
                 
@@ -298,7 +289,7 @@
     </div>
     
     <!-- 模态框：SSH 活跃会话信息 (修改后的结构) -->
-    <div id="session-info-modal" class="fixed inset-0 bg-gray-900 bg-opacity-50 z-[1000] hidden justify-center items-center">
+    <div id="session-info-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="session-modal-username-title">
         <div class="bg-white p-6 rounded-xl shadow-2xl w-full max-w-2xl transition duration-300 transform scale-100">
             <h3 class="text-xl font-bold text-gray-800 mb-4 border-b pb-2">用户 <span id="session-modal-username-title" class="text-indigo-600"></span> 活跃 IP</h3>
             
@@ -321,7 +312,7 @@
     </div>
 
     <!-- 模态框：通用确认 -->
-    <div id="confirm-modal" class="fixed inset-0 bg-gray-900 bg-opacity-50 z-[1000] hidden justify-center items-center">
+    <div id="confirm-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
         <div class="bg-white p-6 rounded-xl shadow-2xl w-full max-w-sm transition duration-300 transform scale-100">
             <h3 class="text-xl font-bold text-gray-800 mb-4 border-b pb-2" id="confirm-title"></h3>
             <p id="confirm-message" class="text-gray-700 mb-6"></p>
@@ -329,7 +320,7 @@
                 <button type="button" onclick="closeModal('confirm-modal')" class="bg-gray-300 hover:bg-gray-400 text-gray-800 font-semibold py-2 px-4 rounded-lg shadow-md transition duration-200">取消</button>
                 <button type="button" id="confirm-action-btn" class="bg-red-600 hover:bg-red-700 text-white font-semibold py-2 px-4 rounded-lg shadow-md transition duration-200">确认</button>
             </div>
-             <!-- 隐藏字段用于存储参数，保持原有JS逻辑兼容性 -->
+             <!-- 隐藏字段用于存储参数，保持原有 JS 逻辑兼容性 -->
             <input type="hidden" id="confirm-param1">
             <input type="hidden" id="confirm-param2">
             <input type="hidden" id="confirm-param3">
@@ -338,9 +329,9 @@
     </div>
     
     <!-- 模态框：批量操作（待实现） -->
-    <div id="batch-modal" class="fixed inset-0 bg-gray-900 bg-opacity-50 z-[1000] hidden justify-center items-center">
+    <div id="batch-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="batch-modal-title">
         <div class="bg-white p-6 rounded-xl shadow-2xl w-full max-w-lg transition duration-300 transform scale-100">
-            <h3 class="text-xl font-bold text-gray-800 mb-4 border-b pb-2">批量操作 / 续期</h3>
+            <h3 class="text-xl font-bold text-gray-800 mb-4 border-b pb-2" id="batch-modal-title">批量操作 / 续期</h3>
             <p class="text-gray-500">此功能将在后续的后端开发中实现。</p>
             <div class="mt-6 flex justify-end">
                 <button type="button" onclick="closeModal('batch-modal')" class="bg-gray-300 hover:bg-gray-400 text-gray-800 font-semibold py-2 px-4 rounded-lg shadow-md transition duration-200">关闭</button>
@@ -415,6 +406,12 @@
                         navLink.classList.add('text-gray-700', 'hover:bg-gray-100');
                     }
                 }
+                
+                // 更新 mobile select 
+                const mobileSelect = document.getElementById('mobile-view-select');
+                if (mobileSelect) {
+                    mobileSelect.value = viewId;
+                }
             });
             currentView = viewId;
             
@@ -471,6 +468,7 @@
             
             renderPortStatusList(data.ports);
             renderUserQuickStats(data.user_stats);
+            renderServiceControlButtons(); // NEW: Render buttons with dynamic ports
         }
         
         function renderPortStatusList(ports) {
@@ -490,6 +488,27 @@
                         '</span>' +
                     '</div>';
             });
+        }
+        
+        function renderServiceControlButtons() {
+            // NEW: 从 FLASK_CONFIG 中获取端口，并动态渲染控制按钮
+            const container = document.getElementById('service-control-buttons');
+            const ports = FLASK_CONFIG;
+            
+            container.innerHTML = `
+                <button onclick="confirmAction('wss', 'restart', null, 'serviceControl', '重启 WSS')" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg transition duration-200 shadow-md">
+                    重启 WSS Proxy (${ports.WSS_HTTP_PORT}/${ports.WSS_TLS_PORT})
+                </button>
+                <button onclick="confirmAction('stunnel4', 'restart', null, 'serviceControl', '重启 Stunnel4')" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg transition duration-200 shadow-md">
+                    重启 Stunnel4 (${ports.STUNNEL_PORT})
+                </button>
+                <button onclick="confirmAction('udpgw', 'restart', null, 'serviceControl', '重启 UDPGW')" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg transition duration-200 shadow-md">
+                    重启 UDPGW (${ports.UDPGW_PORT})
+                </button>
+                <button onclick="confirmAction('wss_panel', 'restart', null, 'serviceControl', '重启面板')" class="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 rounded-lg transition duration-200 shadow-md">
+                    重启 Web Panel (${ports.PANEL_PORT})
+                </button>
+            `;
         }
         
         function renderUserQuickStats(stats) {
@@ -516,7 +535,8 @@
 
         function renderUserList(users) {
             const tbody = document.getElementById('user-list-tbody');
-            tbody.innerHTML = '';
+            // 使用数组和 join() 代替 += 优化性能
+            let rowsHtml = []; 
             
             if (users.length === 0) {
                 tbody.innerHTML = '<tr><td colspan="7" class="px-6 py-4 text-center text-gray-500">暂无用户账号</td></tr>';
@@ -535,37 +555,37 @@
                 const toggleColor = isLocked ? 'bg-green-500 hover:bg-green-600' : 'bg-yellow-500 hover:bg-yellow-600';
                 
                 const quotaLimit = user.quota_gb > 0 ? user.quota_gb : '∞';
-                const usageText = user.usage_gb.toFixed(2) + ' / ' + quotaLimit + ' GB';
+                // FIX V9: 将前端显示精度从 toFixed(2) 提高到 toFixed(4)，与后端保持一致，以显示小流量。
+                const usageText = user.usage_gb.toFixed(4) + ' / ' + quotaLimit + ' GB';
                 
-                // 针对移动端优化操作按钮布局：使用 flex-wrap 和 gap-1 确保按钮换行并显示完全
-                tbody.innerHTML += 
-                    '<tr id="row-' + user.username + '" class="hover:bg-gray-50 transition duration-100">' +
-                        '<td class="px-6 py-4 whitespace-nowrap text-sm font-mono text-gray-900">' + user.username + '</td>' +
-                        '<td class="px-6 py-4 whitespace-nowrap text-sm">' +
-                            '<span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full ' + statusColor + '">' +
-                                statusText +
-                            '</span>' +
-                        '</td>' +
-                        '<td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">' + (user.expiration_date || '永不') + '</td>' +
-                        // NEW: 连接数
-                        '<td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-indigo-600">' + user.active_connections + '</td>' +
-                        // 流量
-                        '<td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-700">' + usageText + '</td>' +
-                        '<td class="px-6 py-4 whitespace-nowrap text-sm font-mono text-indigo-600">' + formatSpeed(user.realtime_speed) + '</td>' +
-                        '<td class="px-6 py-4 text-sm font-medium">' +
-                            '<div class="flex flex-wrap gap-1">' + // 按钮换行容器
-                                '<button onclick="openSessionInfoModal(\'' + user.username + '\')" ' +
-                                        'class="bg-blue-500 hover:bg-blue-600 text-white py-1.5 px-2 rounded-lg text-xs transition duration-150 shadow-sm">会话追踪</button>' + // 按钮文本更改
-                                '<button onclick="openSettingsModal(\'' + user.username + '\', \'' + (user.expiration_date || '') + '\', ' + user.quota_gb + ', \'' + user.rate_kbps + '\')" ' +
-                                        'class="bg-indigo-500 hover:bg-indigo-600 text-white py-1.5 px-2 rounded-lg text-xs transition duration-150 shadow-sm">设置</button>' +
-                                '<button onclick="confirmAction(\'' + user.username + '\', \'' + toggleAction + '\', null, \'toggleStatus\', \'' + toggleText + '用户\')" ' + 
-                                        'class="' + toggleColor + ' text-white py-1.5 px-2 rounded-lg text-xs transition duration-150 shadow-sm">' + toggleText + '</button>' +
-                                '<button onclick="confirmAction(\'' + user.username + '\', \'delete\', null, \'deleteUser\', \'删除用户\')" ' +
-                                        'class="bg-red-500 hover:bg-red-600 text-white py-1.5 px-2 rounded-lg text-xs transition duration-150 shadow-sm">删除</button>' +
-                            '</div>' +
-                        '</td>' +
-                    '</tr>';
+                rowsHtml.push(`
+                    <tr id="row-${user.username}" class="hover:bg-gray-50 transition duration-100">
+                        <td class="px-6 py-4 whitespace-nowrap text-sm font-mono text-gray-900">${user.username}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm">
+                            <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${statusColor}" aria-label="用户状态: ${statusText}">
+                                ${statusText}
+                            </span>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${user.expiration_date || '永不'}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-indigo-600">${user.active_connections}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-700">${usageText}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm font-mono text-indigo-600">${formatSpeed(user.realtime_speed)}</td>
+                        <td class="px-6 py-4 text-sm font-medium" role="cell">
+                            <div class="flex flex-wrap gap-1">
+                                <button onclick="openSessionInfoModal('${user.username}')" 
+                                        class="bg-blue-500 hover:bg-blue-600 text-white py-1.5 px-2 rounded-lg text-xs transition duration-150 shadow-sm" aria-label="会话追踪 ${user.username}">会话追踪</button>
+                                <button onclick="openSettingsModal('${user.username}', '${user.expiration_date || ''}', ${user.quota_gb}, '${user.rate_kbps}')" 
+                                        class="bg-indigo-500 hover:bg-indigo-600 text-white py-1.5 px-2 rounded-lg text-xs transition duration-150 shadow-sm" aria-label="设置 ${user.username}">设置</button>
+                                <button onclick="confirmAction('${user.username}', '${toggleAction}', null, 'toggleStatus', '${toggleText}用户')" 
+                                        class="${toggleColor} text-white py-1.5 px-2 rounded-lg text-xs transition duration-150 shadow-sm" aria-label="${toggleText}用户 ${user.username}">${toggleText}</button>
+                                <button onclick="confirmAction('${user.username}', 'delete', null, 'deleteUser', '删除用户')" 
+                                        class="bg-red-500 hover:bg-red-600 text-white py-1.5 px-2 rounded-lg text-xs transition duration-150 shadow-sm" aria-label="删除用户 ${user.username}">删除</button>
+                            </div>
+                        </td>
+                    </tr>
+                `);
             });
+            tbody.innerHTML = rowsHtml.join('');
         }
         
         function renderActiveGlobalIPs(ipData) {
@@ -592,10 +612,10 @@
                             '</p>' +
                         '</div>' +
                         // 按钮在移动端使用 w-full 占满宽度，在 SM 以上自适应 (w-auto)
-                        '<button onclick="confirmAction(null, \'' + ipInfo.ip + '\', null, \'' + action + 'Global\', \'' + (isBanned ? '解除全局封禁' : '全局封禁 IP') + '\')" ' +
-                                     'class="mt-2 sm:mt-0 w-full sm:w-auto ' + buttonColor + ' text-white py-1.5 px-3 rounded-lg text-xs font-semibold flex-shrink-0">' +
-                            actionText +
-                        '</button>' +
+                        `<button onclick="confirmAction(null, '${ipInfo.ip}', null, '${action}Global', '${isBanned ? '解除全局封禁' : '全局封禁 IP'}')" 
+                                     class="mt-2 sm:mt-0 w-full sm:w-auto ${buttonColor} text-white py-1.5 px-3 rounded-lg text-xs font-semibold flex-shrink-0">
+                            ${actionText}
+                        </button>` +
                     '</div>';
             });
         }
@@ -656,8 +676,8 @@
                             '<strong>' + ip + '</strong> ' +
                             '<span class="text-xs text-gray-500 ml-4">原因: ' + (banInfo.reason || 'N/A') + ' (添加于 ' + banInfo.timestamp + ')</span>' +
                         '</div>' +
-                        '<button onclick="confirmAction(null, \'' + ip + '\', null, \'unbanGlobal\', \'解除全局封禁\')" ' +
-                                     'class="bg-green-600 hover:bg-green-700 text-white py-1.5 px-3 rounded-lg text-xs font-semibold flex-shrink-0">解除封禁</button>' +
+                        `<button onclick="confirmAction(null, '${ip}', null, 'unbanGlobal', '解除全局封禁')" 
+                                     class="bg-green-600 hover:bg-green-700 text-white py-1.5 px-3 rounded-lg text-xs font-semibold flex-shrink-0">解除封禁</button>` +
                     '</div>'
                 );
             }).join('');
@@ -690,10 +710,10 @@
                     return '<div class="flex justify-between items-center p-2 bg-white border border-gray-200 rounded-lg shadow-sm text-xs">' +
                                '<p class="font-mono text-gray-900 flex items-center"><strong>' + ipInfo.ip + '</strong> ' + banTag + '</p>' +
                                // FIX: Global Ban button logic uses correct parameters
-                               '<button onclick="confirmAction(null, \'' + ipInfo.ip + '\', null, \'' + action + 'Global\', \'' + (isBanned ? '解除全局封禁' : '全局封禁 IP') + '\')" ' +
-                               'class="mt-0 w-auto ' + buttonColor + ' text-white py-1 px-2 rounded-lg text-xs font-semibold flex-shrink-0">' +
-                               actionText +
-                               '</button>' +
+                               `<button onclick="confirmAction(null, '${ipInfo.ip}', null, '${action}Global', '${isBanned ? '解除全局封禁' : '全局封禁 IP'}')" 
+                               'class="mt-0 w-auto ${buttonColor} text-white py-1 px-2 rounded-lg text-xs font-semibold flex-shrink-0">
+                               ${actionText}
+                               </button>` +
                                '</div>';
                 }).join('');
             }
@@ -865,7 +885,8 @@
         });
         
         function openSettingsModal(username, expiry_date, quota_gb, rate_kbps) {
-            document.getElementById('modal-username-title-settings').textContent = username; // Note the updated ID
+            // NOTE: 这里没有修改，因为这个函数只负责设置模态框的值，而不是显示格式
+            document.getElementById('modal-username-title-settings').getElementsByTagName('span')[0].textContent = username; 
             document.getElementById('modal-username-setting').value = username;
             
             document.getElementById('modal-expiry-date').value = expiry_date; 
