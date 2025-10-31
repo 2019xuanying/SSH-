@@ -5,7 +5,7 @@ After=network.target
 [Service]
 Type=simple
 
-P3 修复: 将所有配置作为环境变量传递
+P3 修复: 将所有配置作为环境变量传递 (使用 \ 续行)
 
 Environment=PANEL_DIR_ENV=@PANEL_DIR@ 
 
