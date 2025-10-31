@@ -1,0 +1,12 @@
+[Unit]
+Description=UDP Gateway (Badvpn)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/root/badvpn/badvpn-build/udpgw/badvpn-udpgw --listen-addr 127.0.0.1:@UDPGW_PORT@ --max-clients 1024 --max-connections-for-client 10
+Restart=on-failure
+User=root
+
+[Install]
+WantedBy=multi-user.target
