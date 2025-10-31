@@ -742,6 +742,9 @@ def decorated_dashboard():
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     error = None
+    
+    # 修复 UnboundLocalError: 将 html 变量的定义移到函数顶层
+
     if request.method == 'POST':
         username = request.form.get('username')
         password_raw = request.form.get('password')
@@ -792,7 +795,11 @@ def login():
             error = '用户名或密码错误。'
             log_action("LOGIN_FAILED", username, "Invalid username attempt")
 
-        html = f"""
+        # 如果认证失败，则更新 error 变量，并继续执行到函数末尾的 return make_response(html)
+        pass # 继续执行到 HTML 渲染部分
+
+    # 渲染 HTML 模板。无论是 GET 还是 POST 失败，都将渲染此模板。
+    html = f"""
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -1034,7 +1041,7 @@ def toggle_user_status_api():
     username = data.get('username')
     action = data.get('action')
     user, index = get_user(username)
-    if not user: return jsonify({"success": False, "message": f"用户组 {username} 不存在"}), 404
+    if not user: return jsonify({"success": False, "message": "用户组 {username} 不存在"}), 404
     users = load_users()
     
     old_status = users[index]['status']
@@ -1255,4 +1262,3 @@ if __name__ == '__main__':
     except Exception as e:
         print(f"Flask App failed to run: {e}", file=sys.stderr)
         sys.exit(1)
-    
