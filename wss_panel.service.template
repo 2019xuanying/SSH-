@@ -1,0 +1,30 @@
+[Unit]
+Description=WSS User Management Panel (Flask)
+After=network.target
+
+[Service]
+Type=simple
+
+P3 修复: 将所有配置作为环境变量传递
+
+Environment=PANEL_DIR_ENV=@PANEL_DIR@ 
+
+WSS_LOG_FILE_ENV=@WSS_LOG_FILE_PATH@ 
+
+WSS_HTTP_PORT_ENV=@WSS_HTTP_PORT@ 
+
+WSS_TLS_PORT_ENV=@WSS_TLS_PORT@ 
+
+STUNNEL_PORT_ENV=@STUNNEL_PORT@ 
+
+UDPGW_PORT_ENV=@UDPGW_PORT@ 
+
+INTERNAL_FORWARD_PORT_ENV=@INTERNAL_FORWARD_PORT@ 
+
+PANEL_PORT_ENV=@PANEL_PORT@
+ExecStart=/usr/bin/python3 @PANEL_BACKEND_SCRIPT_PATH@
+Restart=on-failure
+User=root
+
+[Install]
+WantedBy=multi-user.target
