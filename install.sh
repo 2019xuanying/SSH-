@@ -4,11 +4,12 @@
 set -eu
 
 # ==========================================================
-# WSS 隧道与用户管理面板模块化部署脚本 (V2.1 - 修复P9/P10)
+# WSS 隧道与用户管理面板模块化部署脚本 (V2.1 - 修复P9/P10/分离登录)
 # ----------------------------------------------------------
 # 修正: 修复了 Flask 路由重定向错误 (P9)。
 # 修正: 修复了 HAS_CRYPT 变量未定义的 NameError (P10)。
 # 修正: 移除了 pip 对标准库 'crypt' 的冗余安装，修复了部署时的安装错误。
+# 新增: 分离了登录页面 (login.html)。
 # ==========================================================
 
 # =============================
@@ -27,6 +28,7 @@ IPTABLES_RULES="/etc/iptables/rules.v4"
 WSS_PROXY_PATH="/usr/local/bin/wss_proxy.py"
 PANEL_BACKEND_PATH="/usr/local/bin/wss_panel.py"
 PANEL_HTML_DEST="$PANEL_DIR/index.html"
+LOGIN_HTML_DEST="$PANEL_DIR/login.html" # 新增登录页面目标路径
 
 # 创建基础目录 (P1 修复)
 mkdir -p "$PANEL_DIR" 
@@ -172,9 +174,13 @@ echo "Panel Backend 脚本复制到 $PANEL_BACKEND_PATH"
 
 # 3. 复制 Panel Frontend (从仓库根目录)
 cp "$REPO_ROOT/index.html" "$PANEL_HTML_DEST"
-echo "Panel Frontend 模板复制到 $PANEL_HTML_DEST"
+echo "Panel Frontend 模板 (index.html) 复制到 $PANEL_HTML_DEST"
 
-# 4. 初始化数据库文件 (如果不存在)
+# 4. 复制 Login Frontend (从仓库根目录)
+cp "$REPO_ROOT/login.html" "$LOGIN_HTML_DEST"
+echo "Login Frontend 模板 (login.html) 复制到 $LOGIN_HTML_DEST"
+
+# 5. 初始化数据库文件 (如果不存在)
 [ ! -f "$PANEL_DIR/users.json" ] && echo "[]" > "$PANEL_DIR/users.json"
 [ ! -f "$PANEL_DIR/ip_bans.json" ] && echo "{}" > "$PANEL_DIR/ip_bans.json"
 [ ! -f "$PANEL_DIR/audit.log" ] && touch "$PANEL_DIR/audit.log"
