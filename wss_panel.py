@@ -274,8 +274,7 @@ def manage_ip_iptables(ip, action, chain_name=BLOCK_CHAIN):
 
 def manage_quota_iptables_rule(username, uid, action='add', quota_limit_bytes=0):
     """
-    【修正 v3 - 优化清理逻辑】管理用户的 IPTables 流量配额和计数规则。
-    修复：简化暴力删除逻辑，避免因删除失败导致后续添加中断的问题。
+    【修正 v5 - 移除所有 --quota 语法，采用基于面板的软限制】管理用户的 IPTables 流量配额和计数规则。
     """
     comment = f"WSS_QUOTA_{username}"
     # 定义匹配规则
@@ -285,67 +284,41 @@ def manage_quota_iptables_rule(username, uid, action='add', quota_limit_bytes=0)
         '-m', 'comment', '--comment', comment
     ]
     
-    # 1. 【清理】清除所有匹配到的旧规则 (避免重复添加)
-    # 策略：暴力删除所有可能的规则形态，直到找不到为止。
-    # 必须从 -L 命令的输出中获取行号进行删除，或者尝试所有已知的规则形态进行删除。
-    
-    # 尝试删除所有可能的旧规则形态 (最多 3 种)
-    
-    # 获取当前 QUOTA_CHAIN 的规则列表
+    # 1. 【清理】清除所有匹配到的旧规则
     list_cmd = ['iptables', '-t', 'filter', '-nL', QUOTA_CHAIN, '--line-numbers']
     success_list, output_list = safe_run_command(list_cmd)
     
     if success_list:
         lines = output_list.split('\n')
-        # 从后往前遍历，防止删除行后行号变化
         for line in reversed(lines):
-            # 使用更宽泛的匹配来查找包含用户注释的规则
+            # 查找所有包含 WSS_QUOTA_<username> 注释的规则
             if comment in line:
-                # 匹配行号 (第一列数字)
                 line_number_match = re.match(r'^\s*(\d+)', line)
                 if line_number_match:
                     line_num = line_number_match.group(1)
                     # 尝试用行号删除规则
                     delete_cmd = ['iptables', '-t', 'filter', '-D', QUOTA_CHAIN, line_num]
-                    # 使用 subprocess.run 而不是 safe_run_command，因为删除不存在的行会返回错误码
                     try:
-                        subprocess.run(delete_cmd, capture_output=True, text=True, encoding='utf-8', timeout=1, check=True)
-                        print(f"Cleaned up rule {line_num} for {username}.", file=sys.stderr)
-                    except subprocess.CalledProcessError as e:
-                        # 忽略删除失败，因为这通常意味着规则已经被删除了。
-                        pass
+                        # 使用 subprocess.run 而不是 safe_run_command，避免 check=True 导致的退出
+                        # NOTE: 忽略删除错误，因为我们希望继续执行添加操作
+                        subprocess.run(delete_cmd, capture_output=True, text=True, encoding='utf-8', timeout=1) 
                     except Exception as e:
-                        # 记录其他删除错误
                         print(f"Warning: Deletion attempt failed for rule {line_num}: {e}", file=sys.stderr)
 
 
     if action == 'add' or action == 'modify':
         
-        # --- 针对无限流量 (Quota = 0) 的特殊处理 ---
-        if quota_limit_bytes == 0:
-            # 无限流量: 仅添加计数规则 (RETURN)，**不使用 --quota**，避免语法错误。
-            command_return = ['iptables', '-A', QUOTA_CHAIN] + match_rule + ['-j', 'RETURN']
-            success, output = safe_run_command(command_return)
-            if not success: 
-                print(f"Error setting QUOTA COUNT rule for {username}: {output}", file=sys.stderr)
-                return False, f"Quota count rule failed: {output}"
+        # --- 统一规则添加：只添加计数规则 (RETURN)，不再使用 --quota 进行硬限制 ---
+        # 流量配额限制将依赖于 sync_user_status 中的 usermod -L 锁定逻辑
         
-        # --- 针对有限流量 (Quota > 0) 的标准处理 ---
-        else:
-            # 规则 1: 在配额内允许通过 (RETURN) - 使用 --quota
-            command_quota = ['iptables', '-A', QUOTA_CHAIN] + match_rule + ['-m', 'quota', '--quota', str(quota_limit_bytes), '-j', 'RETURN']
-            success, output = safe_run_command(command_quota)
-            if not success: 
-                print(f"Error setting QUOTA RETURN rule for {username}: {output}", file=sys.stderr)
-                return False, f"Quota rule setup (RETURN) failed: {output}"
-            
-            # 规则 2: 超出配额拒绝 (DROP) - 不使用 --quota
-            command_drop = ['iptables', '-A', QUOTA_CHAIN] + match_rule + ['-j', 'DROP']
-            success_drop, output_drop = safe_run_command(command_drop)
-            if not success_drop: 
-                print(f"Error setting QUOTA DROP rule for {username}: {output_drop}", file=sys.stderr)
-                return False, f"Quota rule setup (DROP) failed: {output_drop}"
-            
+        # 这条规则将匹配用户的出站流量并让其通过，同时 IPTables 会进行准确的字节计数。
+        command_return = ['iptables', '-A', QUOTA_CHAIN] + match_rule + ['-j', 'RETURN']
+        success, output = safe_run_command(command_return)
+        
+        if not success: 
+            print(f"CRITICAL ERROR: Failed to add QUOTA COUNT/RETURN rule for {username}. Error: {output}", file=sys.stderr)
+            return False, f"Quota count rule failed: {output}"
+        
         # 2. 【持久化】每次更改后尝试保存 IPTables 规则
         try:
             iptables_save_path = shutil.which('iptables-save') or '/sbin/iptables-save'
@@ -356,7 +329,7 @@ def manage_quota_iptables_rule(username, uid, action='add', quota_limit_bytes=0)
             print(f"Warning: Failed to save iptables rules after rule modification: {e}", file=sys.stderr)
             pass
             
-        return True, "Quota rule updated."
+        return True, "Quota rule updated. (Hard quota disabled due to iptables compatibility issues)"
         
     # 仅进行清理操作
     return True, "Quota rule cleaned up."
@@ -364,8 +337,7 @@ def manage_quota_iptables_rule(username, uid, action='add', quota_limit_bytes=0)
 
 def get_user_current_usage_bytes(username, uid):
     """
-    【修正】从 IPTables QUOTA_CHAIN 中获取用户的当前流量使用量（字节）。
-    优化：只关注字节数，不依赖 RETURN/DROP 目标的匹配。
+    【修正 v7 - 修复 IPTables 正则匹配】从 IPTables QUOTA_CHAIN 中获取用户的当前流量使用量（字节）。
     """
     comment = f"WSS_QUOTA_{username}"
     # 获取计数：使用 -Lnvx，只列出匹配到的规则。
@@ -374,33 +346,45 @@ def get_user_current_usage_bytes(username, uid):
         '-t', 'filter', 
         '-nvxL', QUOTA_CHAIN
     ]
+    
+    # --- DEBUG LOGGING START ---
+    print(f"DEBUG: Attempting to read IPTables usage for {username} (UID: {uid})", file=sys.stderr)
+    # --- DEBUG LOGGING END ---
+    
     success, output = safe_run_command(command_get)
     if not success: 
         print(f"Error executing iptables to get usage for {username}: {output}", file=sys.stderr)
         return 0
     
     # 正则表达式匹配 QUOTA_CHAIN 中带有指定 COMMENT 的规则 (查找 bytes 字段)
-    # iptables -nvxL 输出格式通常是: pkts bytes target prot opt in out source destination ... comment
-    # 我们关注的是第二个字段: bytes
-    # 使用 \s+ 确保匹配到字节数字段
-    pattern = re.compile(r'^\s*[\d]+\s+([\d]+).*\s+COMMENT\s+--\s+.*' + re.escape(comment))
+    # 修正正则: 匹配开头空格，pkts字段，至少一个空格，**捕获 bytes 字段**，然后任意字符直到注释
+    # ^\s*[\d]+\s+([\d]+)  -> 匹配 pkts, 匹配空格, 捕获 bytes
+    pattern = re.compile(r'^\s*[\d]+\s+([\d]+).*\/\*\s+' + re.escape(comment) + r'\s+\*\/')
     
-    total_usage = 0
+    # --- DEBUG LOGGING START ---
+    print(f"DEBUG: IPTables -nvxL Output:\n{output}", file=sys.stderr)
+    print(f"DEBUG: Regex pattern used: {pattern.pattern}", file=sys.stderr)
+    # --- DEBUG LOGGING END ---
     
-    # 关键：无论是无限流量（一条 RETURN 规则）还是有限流量（RETURN + DROP），
-    # 只要规则被匹配到，其 bytes 计数器就会增加。我们将所有匹配到的规则的字节数累加，即可得到总用量。
+    # 关键：由于现在只有一条 RETURN 规则用于计数，我们只需获取它的计数即可。
     for line in output.split('\n'):
         match = pattern.search(line)
         if match:
             try: 
                 usage = int(match.group(1))
-                total_usage += usage
+                print(f"DEBUG: Found and parsed usage for {username}: {usage} bytes", file=sys.stderr)
+                # 因为只添加了一条规则，所以直接返回找到的第一个计数
+                return usage
             except (IndexError, ValueError): 
                 # 解析失败，可能是格式不匹配
+                print(f"DEBUG: Failed to parse bytes from matched line: {line}", file=sys.stderr)
                 continue 
-    
-    # 如果找到任何匹配规则，返回累加的流量。否则返回 0
-    return total_usage
+        elif line.strip() != "":
+             # 打印未匹配的非空行，帮助我们理解 IPTables 输出的格式
+             print(f"DEBUG: Line did not match pattern: {line}", file=sys.stderr)
+
+    # 如果找不到匹配规则，返回 0
+    return 0
 
     
 def reset_iptables_counters(username):
@@ -637,7 +621,8 @@ def sync_user_status(user):
     is_over_quota = (quota_limit_gb > 0 and current_bytes >= quota_limit_bytes)
     
     # 更新用户对象中的用量数据
-    user['usage_gb'] = round(current_bytes / GIGA_BYTE, 2)
+    # 【V8 修正】将四舍五入精度从 2 位提高到 4 位
+    user['usage_gb'] = round(current_bytes / GIGA_BYTE, 4)
 
     # 账户应被锁定的条件
     should_be_locked = is_expired or is_over_quota or (user.get('status') == 'paused')
@@ -1006,7 +991,7 @@ def add_user_api():
     manage_quota_iptables_rule(username, uid, 'add', quota * GIGA_BYTE)
     apply_rate_limit(uid, rate)
     
-    log_action("USER_ADD_SUCCESS", session.get('username', 'root'), f"User {username} created, expiry: {expiry_date}, quota: {quota}GB, rate: {rate}KB/s")
+    log_action("USER_ADD_SUCCESS", session.get('username', 'root'), f"User {username} created, expiry: {expiry_date}, Quota {quota}GB, rate: {rate}KB/s")
     return jsonify({"success": True, "message": f"用户 {username} 创建成功，有效期至 {expiry_date}"})
 
 @app.route('/api/users/delete', methods=['POST'])
