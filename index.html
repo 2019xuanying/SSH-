@@ -555,13 +555,13 @@
                         '<td class="px-6 py-4 text-sm font-medium">' +
                             '<div class="flex flex-wrap gap-1">' + // 按钮换行容器
                                 '<button onclick="openSessionInfoModal(\'' + user.username + '\')" ' +
-                                    'class="bg-blue-500 hover:bg-blue-600 text-white py-1.5 px-2 rounded-lg text-xs transition duration-150 shadow-sm">会话追踪</button>' + // 按钮文本更改
+                                        'class="bg-blue-500 hover:bg-blue-600 text-white py-1.5 px-2 rounded-lg text-xs transition duration-150 shadow-sm">会话追踪</button>' + // 按钮文本更改
                                 '<button onclick="openSettingsModal(\'' + user.username + '\', \'' + (user.expiration_date || '') + '\', ' + user.quota_gb + ', \'' + user.rate_kbps + '\')" ' +
-                                    'class="bg-indigo-500 hover:bg-indigo-600 text-white py-1.5 px-2 rounded-lg text-xs transition duration-150 shadow-sm">设置</button>' +
+                                        'class="bg-indigo-500 hover:bg-indigo-600 text-white py-1.5 px-2 rounded-lg text-xs transition duration-150 shadow-sm">设置</button>' +
                                 '<button onclick="confirmAction(\'' + user.username + '\', \'' + toggleAction + '\', null, \'toggleStatus\', \'' + toggleText + '用户\')" ' + 
-                                    'class="' + toggleColor + ' text-white py-1.5 px-2 rounded-lg text-xs transition duration-150 shadow-sm">' + toggleText + '</button>' +
+                                        'class="' + toggleColor + ' text-white py-1.5 px-2 rounded-lg text-xs transition duration-150 shadow-sm">' + toggleText + '</button>' +
                                 '<button onclick="confirmAction(\'' + user.username + '\', \'delete\', null, \'deleteUser\', \'删除用户\')" ' +
-                                    'class="bg-red-500 hover:bg-red-600 text-white py-1.5 px-2 rounded-lg text-xs transition duration-150 shadow-sm">删除</button>' +
+                                        'class="bg-red-500 hover:bg-red-600 text-white py-1.5 px-2 rounded-lg text-xs transition duration-150 shadow-sm">删除</button>' +
                             '</div>' +
                         '</td>' +
                     '</tr>';
@@ -688,13 +688,13 @@
                     const banTag = isBanned ? '<span class="text-xs px-2 py-0.5 rounded-full ip-banned-tag ml-2">已封禁</span>' : '';
 
                     return '<div class="flex justify-between items-center p-2 bg-white border border-gray-200 rounded-lg shadow-sm text-xs">' +
-                                '<p class="font-mono text-gray-900 flex items-center"><strong>' + ipInfo.ip + '</strong> ' + banTag + '</p>' +
-                                // FIX: Global Ban button logic uses correct parameters
-                                '<button onclick="confirmAction(null, \'' + ipInfo.ip + '\', null, \'' + action + 'Global\', \'' + (isBanned ? '解除全局封禁' : '全局封禁 IP') + '\')" ' +
-                                'class="mt-0 w-auto ' + buttonColor + ' text-white py-1 px-2 rounded-lg text-xs font-semibold flex-shrink-0">' +
-                                actionText +
-                                '</button>' +
-                                '</div>';
+                               '<p class="font-mono text-gray-900 flex items-center"><strong>' + ipInfo.ip + '</strong> ' + banTag + '</p>' +
+                               // FIX: Global Ban button logic uses correct parameters
+                               '<button onclick="confirmAction(null, \'' + ipInfo.ip + '\', null, \'' + action + 'Global\', \'' + (isBanned ? '解除全局封禁' : '全局封禁 IP') + '\')" ' +
+                               'class="mt-0 w-auto ' + buttonColor + ' text-white py-1 px-2 rounded-lg text-xs font-semibold flex-shrink-0">' +
+                               actionText +
+                               '</button>' +
+                               '</div>';
                 }).join('');
             }
         }
@@ -1049,7 +1049,6 @@
             }
 
             switchView('dashboard');
-            // 启动定时刷新
             setInterval(refreshAllData, 10000); 
         };
 
