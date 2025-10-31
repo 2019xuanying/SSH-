@@ -10,6 +10,7 @@ set -eu
 # 修正: 修复了 HAS_CRYPT 变量未定义的 NameError (P10)。
 # 修正: 移除了 pip 对标准库 'crypt' 的冗余安装，修复了部署时的安装错误。
 # 新增: 分离了登录页面 (login.html)。
+# FIX: 修复了 UDPGW 部分的 Bash 语法错误（Markdown 链接格式）。
 # ==========================================================
 
 # =============================
@@ -230,7 +231,8 @@ echo "----------------------------------"
 # =============================
 echo "==== 重新部署 UDPGW ===="
 if [ ! -d "/root/badvpn" ]; then
-    git clone [https://github.com/ambrop72/badvpn.git](https://github.com/ambrop72/badvpn.git) /root/badvpn > /dev/null 2>&1
+    # FIX: 移除错误的 Markdown 链接语法，使用纯 URL 字符串
+    git clone https://github.com/ambrop72/badvpn.git /root/badvpn > /dev/null 2>&1
 fi
 mkdir -p /root/badvpn/badvpn-build
 cd /root/badvpn/badvpn-build
