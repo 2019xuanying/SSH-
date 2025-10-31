@@ -4,9 +4,10 @@
 set -eu
 
 # ==========================================================
-# WSS 隧道与用户管理面板模块化部署脚本 (V2.1 结构修正版)
+# WSS 隧道与用户管理面板模块化部署脚本 (V2.1 - 修复P9/P10)
 # ----------------------------------------------------------
-# 修正: 适应 Git 仓库的扁平结构，所有模板文件都从根目录复制。
+# 修正: 修复了 Flask 路由重定向错误 (P9)。
+# 修正: 修复了 HAS_CRYPT 变量未定义的 NameError (P10)。
 # ==========================================================
 
 # =============================
@@ -86,9 +87,11 @@ systemctl stop wss_panel || true
 
 # 依赖检查和安装
 apt update -y
+# 确保安装 procps（用于 psutil, ps -S 等）和 libffi-dev (用于 bcrypt)
 apt install -y python3 python3-pip wget curl git net-tools cmake build-essential openssl stunnel4 iproute2 iptables procps libffi-dev || echo "警告: 依赖安装失败，可能影响功能。"
 
 # 尝试安装 Python 库
+# 注意：尝试安装 crypt, 虽然在某些系统上它可能作为标准库存在，但最好尝试安装，以防万一。
 if pip3 install flask psutil requests uvloop bcrypt crypt; then
     HAS_BCRYPT=1
     echo "Python 依赖 (Flask, psutil, uvloop, bcrypt, crypt) 安装成功。"
@@ -338,6 +341,7 @@ echo "SSHD 配置已备份到 ${SSHD_CONFIG}${BACKUP_SUFFIX}"
 
 sed -i '/# WSS_TUNNEL_BLOCK_START/,/# WSS_TUNNEL_BLOCK_END/d' "$SSHD_CONFIG"
 
+# 写入新的 WSS 隧道策略 (核心: PermitTTY no 和 ForceCommand /bin/false)
 cat >> "$SSHD_CONFIG" <<EOF
 
 # WSS_TUNNEL_BLOCK_START -- managed by modular-deploy.sh
