@@ -273,59 +273,63 @@ def manage_ip_iptables(ip, action, chain_name=BLOCK_CHAIN):
 # --- 流量管控 (Quota/Rate Limit) 逻辑 (增强错误日志) ---
 
 def manage_quota_iptables_rule(username, uid, action='add', quota_limit_bytes=0):
-    """管理用户的 IPTables 流量配额和计数规则。"""
+    """
+    【修正】管理用户的 IPTables 流量配额和计数规则。
+    为了解决规则丢失问题，我们确保无论配额如何，都至少有一条规则用于流量计数。
+    """
     comment = f"WSS_QUOTA_{username}"
-    # 定义基础规则，用于匹配和清除
-    base_rule = [
+    # 定义匹配规则
+    match_rule = [
         '-t', 'filter',
         '-m', 'owner', '--uid-owner', str(uid),
         '-m', 'comment', '--comment', comment
     ]
     
-    # 清理所有旧规则 (RETURN 和 DROP)
+    # 1. 【清理】清除所有匹配到的旧规则 (避免重复添加)
+    iptables_bin = shutil.which('iptables') or '/sbin/iptables'
+    # 尝试删除所有可能的规则形态（配额RETURN, 配额DROP, 无配额RETURN）
+    # 暴力删除匹配的规则直到失败 (没有更多规则可删)
     try:
-        iptables_bin = shutil.which('iptables') or '/sbin/iptables'
-        # 检查并删除所有匹配的规则（可能有多条）
-        while True:
-            # 尝试删除带配额的规则
-            result = subprocess.run([iptables_bin, '-t', 'filter', '-D', QUOTA_CHAIN] + base_rule + ['-m', 'quota', '--quota', '0', '-j', 'RETURN'], capture_output=True, timeout=2)
-            if result.returncode != 0: break
-        while True:
-            # 尝试删除 DROP 规则
-            result = subprocess.run([iptables_bin, '-t', 'filter', '-D', QUOTA_CHAIN] + base_rule + ['-j', 'DROP'], capture_output=True, timeout=2)
-            if result.returncode != 0: break
-        while True:
-            # 尝试删除无 quota 的 RETURN 规则 (作为无限流量的计数规则)
-            result = subprocess.run([iptables_bin, '-t', 'filter', '-D', QUOTA_CHAIN] + base_rule + ['-j', 'RETURN'], capture_output=True, timeout=2)
-            if result.returncode != 0: break
-    except Exception:
+        for target in ['RETURN', 'DROP']:
+            while True:
+                # 尝试删除规则，-D 是删除
+                # 注意：-D 需要完全匹配规则，所以我们尝试各种形式
+                # 尝试删除配额规则
+                result = subprocess.run([iptables_bin, '-t', 'filter', '-D', QUOTA_CHAIN] + match_rule + ['-m', 'quota', '--quota', '0', '-j', target], capture_output=True, timeout=1, text=True)
+                if result.returncode != 0: break # 删除失败或规则不存在，跳出
+            while True:
+                # 尝试删除无配额规则（仅计数）
+                result = subprocess.run([iptables_bin, '-t', 'filter', '-D', QUOTA_CHAIN] + match_rule + ['-j', target], capture_output=True, timeout=1, text=True)
+                if result.returncode != 0: break # 删除失败或规则不存在，跳出
+    except Exception as e:
+        print(f"Warning: IPTables cleanup failed for {username}: {e}", file=sys.stderr)
         pass # 忽略清理错误
 
-    
     if action == 'add' or action == 'modify':
         if quota_limit_bytes > 0:
             # 规则 1: 在配额内允许通过 (RETURN)
-            command_quota = ['iptables', '-A', QUOTA_CHAIN] + base_rule + ['-m', 'quota', '--quota', str(quota_limit_bytes), '-j', 'RETURN']
+            command_quota = ['iptables', '-A', QUOTA_CHAIN] + match_rule + ['-m', 'quota', '--quota', str(quota_limit_bytes), '-j', 'RETURN']
             success, output = safe_run_command(command_quota)
             if not success: 
-                print(f"Error setting QUOTA RETURN rule for {username}: {output}", file=sys.stderr) # NEW LOGGING
+                print(f"Error setting QUOTA RETURN rule for {username}: {output}", file=sys.stderr)
                 return False, f"Quota rule setup (RETURN) failed: {output}"
             
             # 规则 2: 超出配额拒绝 (DROP)
-            command_drop = ['iptables', '-A', QUOTA_CHAIN] + base_rule + ['-j', 'DROP']
+            command_drop = ['iptables', '-A', QUOTA_CHAIN] + match_rule + ['-j', 'DROP']
             success_drop, output_drop = safe_run_command(command_drop)
             if not success_drop: 
-                print(f"Error setting QUOTA DROP rule for {username}: {output_drop}", file=sys.stderr) # NEW LOGGING
+                print(f"Error setting QUOTA DROP rule for {username}: {output_drop}", file=sys.stderr)
                 return False, f"Quota rule setup (DROP) failed: {output_drop}"
         else:
             # 无限流量: 仅添加计数规则 (RETURN)，用于获取流量数据
-            command_return = ['iptables', '-A', QUOTA_CHAIN] + base_rule + ['-j', 'RETURN']
+            # 注意：此规则会匹配流量并返回，但由于没有 quota 限制，其计数器会持续增加。
+            command_return = ['iptables', '-A', QUOTA_CHAIN] + match_rule + ['-j', 'RETURN']
             success, output = safe_run_command(command_return)
             if not success: 
-                print(f"Error setting QUOTA COUNT rule for {username}: {output}", file=sys.stderr) # NEW LOGGING
+                print(f"Error setting QUOTA COUNT rule for {username}: {output}", file=sys.stderr)
                 return False, f"Quota count rule failed: {output}"
             
-        # 每次更改后保存 IPTables 规则
+        # 2. 【持久化】每次更改后尝试保存 IPTables 规则
         try:
             iptables_save_path = shutil.which('iptables-save') or '/sbin/iptables-save'
             rules_v4_path = '/etc/iptables/rules.v4'
@@ -342,7 +346,10 @@ def manage_quota_iptables_rule(username, uid, action='add', quota_limit_bytes=0)
 
 
 def get_user_current_usage_bytes(username, uid):
-    """【性能优化】从 IPTables QUOTA_CHAIN 中获取用户的当前流量使用量（字节）。"""
+    """
+    【修正】从 IPTables QUOTA_CHAIN 中获取用户的当前流量使用量（字节）。
+    优化：只关注字节数，不依赖 RETURN/DROP 目标的匹配。
+    """
     comment = f"WSS_QUOTA_{username}"
     # 获取计数：使用 -Lnvx，只列出匹配到的规则。
     command_get = [
@@ -358,20 +365,28 @@ def get_user_current_usage_bytes(username, uid):
     # 正则表达式匹配 QUOTA_CHAIN 中带有指定 COMMENT 的规则 (查找 bytes 字段)
     # iptables -nvxL 输出格式通常是: pkts bytes target prot opt in out source destination ... comment
     # 我们关注的是第二个字段: bytes
-    pattern = re.compile(r'^\s*[\d]+\s+([\d]+).*COMMENT\s+--\s+.*' + re.escape(comment))
+    # 匹配规则: 行首 (空格), 任意数字 (pkts), 至少一个空格, 捕获的字节数 (bytes), 任意字符直到 COMMENT 字段
+    # 使用 \s+ 确保匹配到字节数字段
+    pattern = re.compile(r'^\s*[\d]+\s+([\d]+).*\s+COMMENT\s+--\s+.*' + re.escape(comment))
+    
+    total_usage = 0
+    
+    # 关键：由于有两条规则 (RETURN 和 DROP)，我们需要累加它们的流量。
+    # 对于无限流量用户只有一条 RETURN 规则，其 bytes 字段即为总用量。
+    # 对于有限流量用户，RETURN 规则的 bytes + DROP 规则的 bytes = 总用量。
     for line in output.split('\n'):
         match = pattern.search(line)
         if match:
-            # 返回匹配到的字节数
             try: 
-                # 检查流量限制规则 (RETURN 目标) 或 DROP 规则，他们都有计数
-                if 'RETURN' in line or 'DROP' in line:
-                    return int(match.group(1)) 
+                usage = int(match.group(1))
+                total_usage += usage
             except (IndexError, ValueError): 
-                return 0 
+                # 解析失败，可能是格式不匹配
+                continue 
     
-    # 如果找不到匹配的行（例如，规则被删除或尚未创建），返回 0
-    return 0
+    # 如果找到任何匹配规则，返回累加的流量。否则返回 0
+    return total_usage
+
     
 def reset_iptables_counters(username):
     """重置指定用户名的 IPTables 计数器。"""
@@ -636,16 +651,18 @@ def sync_user_status(user):
         user['status'] = 'active'
 
     # --- 规则同步 (始终确保规则状态与配额匹配) ---
-    apply_rate_limit(uid, user.get('rate_limit_kbps', '0'))
+    apply_rate_limit(uid, user.get('rate_kbps', '0'))
     
-    # 只有当用户状态不为 'exceeded' 时，才应该添加 quota 规则，防止用户继续使用（通过 iptables DROP 规则实现）
-    if user['status'] != 'exceeded' and quota_limit_bytes > 0:
-        manage_quota_iptables_rule(username, uid, 'add', quota_limit_bytes)
-    elif user['status'] != 'exceeded' and quota_limit_bytes == 0:
-        manage_quota_iptables_rule(username, uid, 'add', 0) # Infinite usage, still count traffic
+    # 【关键修正】：无论用户是否超额或被暂停，都应该**尝试添加**计数和限制规则
+    # manage_quota_iptables_rule 的内部逻辑会处理是添加 RETURN/DROP 还是只添加 RETURN。
+    # 唯一不添加规则的情况是用户被删除，但我们在这里已经通过 uid is None 提前处理了。
+    if user['status'] == 'exceeded':
+        # 如果超额，我们强制添加配额为 0 的规则，确保 DROP 规则生效（如果配额限制已存在）。
+        # 如果 quota_limit_bytes > 0，manage_quota_iptables_rule 内部会创建 DROP 规则。
+        manage_quota_iptables_rule(username, uid, 'add', 0)
     else:
-        # 如果是 exceeded 状态，我们不添加 RETURN 规则，确保流量被后续的 DROP 规则捕获
-        manage_quota_iptables_rule(username, uid, 'delete', 0) 
+        # 正常或暂停状态，根据面板配置的配额添加规则
+        manage_quota_iptables_rule(username, uid, 'add', quota_limit_bytes)
         
     # --- 活跃连接和流量分配 (面板显示) ---
     active_conns = get_user_active_connections(username)
