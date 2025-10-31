@@ -43,6 +43,9 @@ ROOT_HASH_FILE = os.path.join(PANEL_DIR, 'root_hash.txt')
 PANEL_HTML_PATH = os.path.join(PANEL_DIR, 'index.html')
 LOGIN_HTML_PATH = os.path.join(PANEL_DIR, 'login.html') # 新增登录页面路径
 SECRET_KEY_PATH = os.path.join(PANEL_DIR, 'secret_key.txt')
+# NEW: Host 白名单配置路径
+HOSTS_DB_PATH = os.path.join(PANEL_DIR, 'hosts.json') 
+
 # 🐞 BUG FIX: 修复 os.environ.environ 导致的 AttributeError (V13 修复)
 WSS_LOG_FILE = os.environ.get('WSS_LOG_FILE_ENV', '/var/log/wss.log')
 
@@ -104,6 +107,21 @@ def save_data(data, path):
 # NEW V9 FIX: 强制每次都重新加载，避免内存缓存旧数据
 def load_users(): 
     return load_data(USER_DB_PATH, [])
+
+# NEW HOST FUNCTION: 加载 Host 白名单列表 (返回列表 of strings)
+def load_hosts():
+    # 默认值是一个包含 ["default-host.com"] 的列表，以确保 hosts.json 存在
+    hosts = load_data(HOSTS_DB_PATH, ["default-host.com"])
+    # 确保返回的是一个列表，并且所有元素都是字符串
+    if not isinstance(hosts, list):
+        hosts = ["default-host.com"]
+    return [str(h).lower() for h in hosts]
+
+# NEW HOST FUNCTION: 保存 Host 白名单列表
+def save_hosts(hosts):
+    # 确保保存前所有 Host 都是小写且唯一的
+    clean_hosts = list(set([str(h).strip().lower() for h in hosts if str(h).strip()]))
+    return save_data(clean_hosts, HOSTS_DB_PATH)
     
 def save_users(users): return save_data(users, USER_DB_PATH)
 def load_ip_bans(): return load_data(IP_BANS_DB_PATH, {})
@@ -1177,6 +1195,42 @@ def get_user_ip_activity_api():
     session_info = get_user_active_sessions_info(username)
     
     return jsonify({"success": True, "session_info": session_info})
+
+# --- NEW: Host 白名单管理 API ---
+
+@app.route('/api/settings/hosts', methods=['GET'])
+@login_required
+def get_hosts_api():
+    """获取当前的 Host 白名单列表。"""
+    hosts = load_hosts()
+    return jsonify({"success": True, "hosts": hosts})
+
+@app.route('/api/settings/hosts', methods=['POST'])
+@login_required
+def set_hosts_api():
+    """设置新的 Host 白名单列表。"""
+    data = request.json
+    new_hosts_raw = data.get('hosts')
+    
+    if not isinstance(new_hosts_raw, list):
+        return jsonify({"success": False, "message": "Hosts 必须是列表格式"}), 400
+        
+    # 清理并规范化 Host 列表
+    new_hosts = [str(h).strip().lower() for h in new_hosts_raw if str(h).strip()]
+    
+    # 强制将 Host 列表写入 hosts.json
+    success = save_hosts(new_hosts)
+    
+    if success:
+        log_action("HOSTS_UPDATE", session.get('username', 'root'), f"Updated host whitelist. Count: {len(new_hosts)}")
+        # NEW: 通知 WSS 代理重新加载 Host 列表 (通过重启服务实现)
+        # 注意: 只有 wss_proxy.py 需要重启才能加载新的 hosts.json
+        safe_run_command(['systemctl', 'restart', 'wss'])
+        return jsonify({"success": True, "message": f"Host 白名单已更新并触发 WSS 代理重启以生效。共 {len(new_hosts)} 个 Host。"})
+    else:
+        return jsonify({"success": False, "message": "保存 Hosts 配置失败"}), 500
+
+# --- END NEW HOST API ---
 
 
 @app.route('/api/ips/ban_global', methods=['POST'])
