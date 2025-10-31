@@ -6,7 +6,7 @@ set -eu
 # ==========================================================
 # WSS 隧道与用户管理面板模块化部署脚本 (V2.1 结构修正版)
 # ----------------------------------------------------------
-# 修正: 适应 Git 仓库的扁平结构，直接从根目录复制 wss_proxy.py 等文件。
+# 修正: 适应 Git 仓库的扁平结构，所有模板文件都从根目录复制。
 # ==========================================================
 
 # =============================
@@ -156,19 +156,16 @@ echo "----------------------------------"
 # =============================
 echo "==== 部署模块化代码文件 (使用扁平路径) ===="
 # 1. 复制 WSS Proxy (从仓库根目录)
-# 修正点: 从 $REPO_ROOT/wss_proxy.py 复制
 cp "$REPO_ROOT/wss_proxy.py" "$WSS_PROXY_PATH"
 chmod +x "$WSS_PROXY_PATH"
 echo "WSS Proxy 脚本复制到 $WSS_PROXY_PATH"
 
 # 2. 复制 Panel Backend (从仓库根目录)
-# 修正点: 从 $REPO_ROOT/wss_panel.py 复制
 cp "$REPO_ROOT/wss_panel.py" "$PANEL_BACKEND_PATH"
 chmod +x "$PANEL_BACKEND_PATH"
 echo "Panel Backend 脚本复制到 $PANEL_BACKEND_PATH"
 
 # 3. 复制 Panel Frontend (从仓库根目录)
-# 修正点: 从 $REPO_ROOT/index.html 复制
 cp "$REPO_ROOT/index.html" "$PANEL_HTML_DEST"
 echo "Panel Frontend 模板复制到 $PANEL_HTML_DEST"
 
@@ -230,23 +227,13 @@ cmake .. -DBUILD_NOTHING_BY_DEFAULT=1 -DBUILD_UDPGW=1 > /dev/null 2>&1
 make -j$(nproc) > /dev/null 2>&1
 cd - > /dev/null
 
-# 部署 UDPGW systemd 服务 (使用新的 udpgw.service.template)
+# 部署 UDPGW systemd 服务 (从根目录复制模板并替换变量)
 UDPGW_SERVICE_PATH="/etc/systemd/system/udpgw.service"
-# 使用内嵌模板替代文件复制，因为您没有提供 udpgw.service.template 文件
-tee "$UDPGW_SERVICE_PATH" > /dev/null <<EOF
-[Unit]
-Description=UDP Gateway (Badvpn)
-After=network.target
+# 修正点: 从 $REPO_ROOT/udpgw.service.template 复制
+cp "$REPO_ROOT/udpgw.service.template" "$UDPGW_SERVICE_PATH"
+# 替换模板中的变量
+sed -i "s|@UDPGW_PORT@|$UDPGW_PORT|g" "$UDPGW_SERVICE_PATH"
 
-[Service]
-Type=simple
-ExecStart=/root/badvpn/badvpn-build/udpgw/badvpn-udpgw --listen-addr 127.0.0.1:$UDPGW_PORT --max-clients 1024 --max-connections-for-client 10
-Restart=on-failure
-User=root
-
-[Install]
-WantedBy=multi-user.target
-EOF
 
 systemctl daemon-reload
 systemctl enable udpgw
@@ -300,36 +287,26 @@ echo "----------------------------------"
 # =============================
 echo "==== 部署 Systemd 服务 ===="
 
-# 1. 部署 WSS Proxy Service
+# 1. 部署 WSS Proxy Service (从根目录复制模板并替换变量)
 WSS_SERVICE_PATH="/etc/systemd/system/wss.service"
-# 使用内嵌模板替换变量 (因为您没有提供 wss.service.template 文件)
-tee "$WSS_SERVICE_PATH" > /dev/null <<EOF
-[Unit]
-Description=WSS Python Proxy
-After=network.target
+# 修正点: 从 $REPO_ROOT/wss.service.template 复制
+cp "$REPO_ROOT/wss.service.template" "$WSS_SERVICE_PATH"
+# 替换模板中的变量
+sed -i "s|@WSS_LOG_FILE_PATH@|$WSS_LOG_FILE|g" "$WSS_SERVICE_PATH"
+sed -i "s|@WSS_PROXY_SCRIPT_PATH@|$WSS_PROXY_PATH|g" "$WSS_SERVICE_PATH"
+sed -i "s|@WSS_HTTP_PORT@|$WSS_HTTP_PORT|g" "$WSS_SERVICE_PATH"
+sed -i "s|@WSS_TLS_PORT@|$WSS_TLS_PORT|g" "$WSS_SERVICE_PATH"
+sed -i "s|@INTERNAL_FORWARD_PORT@|$INTERNAL_FORWARD_PORT|g" "$WSS_SERVICE_PATH"
 
-[Service]
-Type=simple
-Environment=WSS_LOG_FILE_ENV=$WSS_LOG_FILE
-ExecStart=/usr/bin/python3 $WSS_PROXY_PATH $WSS_HTTP_PORT $WSS_TLS_PORT $INTERNAL_FORWARD_PORT
-Restart=on-failure
-User=root
-StandardOutput=journal
-StandardError=journal
-ExecStartPre=/bin/bash -c "touch $WSS_LOG_FILE && chmod 644 $WSS_LOG_FILE"
-
-[Install]
-WantedBy=multi-user.target
-EOF
 
 systemctl daemon-reload
 systemctl enable wss
 systemctl start wss
 echo "WSS 代理服务已部署并启动。"
 
-# 2. 部署 Panel Service
+# 2. 部署 Panel Service (从根目录复制模板并替换变量)
 PANEL_SERVICE_PATH="/etc/systemd/system/wss_panel.service"
-# 从仓库根目录复制 wss_panel.service.template，然后替换变量
+# 修正点: 从 $REPO_ROOT/wss_panel.service.template 复制
 cp "$REPO_ROOT/wss_panel.service.template" "$PANEL_SERVICE_PATH"
 # 替换模板中的变量
 sed -i "s|@PANEL_DIR@|$PANEL_DIR|g" "$PANEL_SERVICE_PATH"
