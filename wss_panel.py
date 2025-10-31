@@ -28,14 +28,13 @@ except ImportError:
         HAS_CRYPT = False
 
 
-# --- 配置 (从环境变量读取) ---
-# 这些环境变量由 deploy.sh 脚本在 systemd service 文件中设置
+# --- 配置 (从环境变量读取，确保分离) ---
 PANEL_DIR = os.environ.get('PANEL_DIR_ENV', '/etc/wss-panel')
 USER_DB_PATH = os.path.join(PANEL_DIR, 'users.json')
 IP_BANS_DB_PATH = os.path.join(PANEL_DIR, 'ip_bans.json')
 AUDIT_LOG_PATH = os.path.join(PANEL_DIR, 'audit.log')
 ROOT_HASH_FILE = os.path.join(PANEL_DIR, 'root_hash.txt')
-PANEL_HTML_PATH = os.path.join(PANEL_DIR, 'index.html') # 从 panel_template.html 复制而来
+PANEL_HTML_PATH = os.path.join(PANEL_DIR, 'index.html')
 SECRET_KEY_PATH = os.path.join(PANEL_DIR, 'secret_key.txt')
 WSS_LOG_FILE = os.environ.get('WSS_LOG_FILE_ENV', '/var/log/wss.log')
 
@@ -64,13 +63,12 @@ app = Flask(__name__)
 
 # --- 加载持久化的 Secret Key ---
 def load_secret_key():
-    """加载或生成 Flask Session 所需的 Secret Key。"""
     try:
-        # Secret key 由 deploy.sh 确保存在
         with open(SECRET_KEY_PATH, 'r') as f:
             return f.read().strip()
     except Exception:
         # Fallback to generate a new key if file read fails (unlikely if setup is correct)
+        print("Warning: Failed to load persistent secret key. Generating temporary key.", file=sys.stderr)
         return os.urandom(24).hex() 
 
 app.secret_key = load_secret_key()
@@ -106,7 +104,6 @@ def load_root_hash():
     except Exception: return None
 
 def log_action(action_type, username, details=""):
-    """记录管理员审计日志。"""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     operator_ip = request.remote_addr if request else "127.0.0.1 (System)"
     log_entry = f"[{timestamp}] [USER:{username}] [IP:{operator_ip}] ACTION:{action_type} DETAILS: {details}\n"
@@ -116,13 +113,13 @@ def log_action(action_type, username, details=""):
         print(f"Error writing to audit log: {e}")
 
 def get_recent_audit_logs(n=20):
-    """获取最近 n 条管理员审计日志。"""
     try:
         if not os.path.exists(AUDIT_LOG_PATH):
             return ["日志文件不存在。"]
-        # 使用 tail 命令读取文件末尾 n 行
+        # 使用 shutil.which 查找 tail 的路径以提高兼容性
         command = [shutil.which('tail') or '/usr/bin/tail', '-n', str(n), AUDIT_LOG_PATH]
         result = subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=2)
+        # Fix: Ensure each line is processed correctly, avoiding unexpected symbols
         return result.stdout.decode('utf-8').strip().split('\n')
     except Exception:
         return ["读取日志失败或日志文件为空。"]
@@ -142,41 +139,41 @@ def login_required(f):
             else:
                 # 页面请求重定向到登录页
                 return redirect(url_for('login'))
-            
+        
         return f(*args, **kwargs)
     decorated_function.__name__ = f.__name__ + "_decorated"
     return decorated_function
 
-# --- 系统命令执行和状态函数 ---
+# --- 系统命令执行和状态函数 (保持不变) ---
 def safe_run_command(command, input_data=None):
-    """
-    安全运行系统命令。
-    此版本将忽略 stderr，除非返回码明确表示失败，以解决 ss 等命令在不同系统上将表头/警告输出到 stderr 的兼容性问题。
-    """
+    """安全运行系统命令。"""
     try:
-        process = subprocess.run(
+        # 使用 Popen 和 communicate 处理输入/输出/超时
+        process = subprocess.Popen(
             command, 
-            capture_output=True, 
+            stdout=subprocess.PIPE, 
+            stderr=subprocess.PIPE,
+            stdin=subprocess.PIPE if input_data is not None else None,
             text=True, 
-            encoding='utf-8',
-            input=input_data,
-            timeout=5
+            encoding='utf-8'
         )
-        stdout = process.stdout.strip()
-        stderr = process.stderr.strip()
-        
-        # 允许某些非零退出码通过 (例如 grep, userdel -r)
+        stdout, stderr = process.communicate(input=input_data, timeout=5)
+
+        # 检查 returncode，非零则判断为失败
         if process.returncode != 0:
+            # 忽略一些预期的非致命错误
             if 'already exists' in stderr or 'No chain/target/match' in stderr or 'user not found' in stderr or 'no such process' in stderr:
-                return True, stdout
+                return True, stdout.strip()
             
             # 如果是其他非零返回码，返回失败
-            return False, stderr or f"Command failed with code {process.returncode}"
+            return False, stderr.strip() or f"Command failed with code {process.returncode}"
         
         # 成功执行
-        return True, stdout
+        return True, stdout.strip()
         
     except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
         return False, "Command timed out"
     except FileNotFoundError:
         return False, f"Command not found: {command[0]}"
@@ -208,6 +205,7 @@ def get_port_status(port):
         ss_bin = shutil.which('ss') or '/bin/ss'
         # Check for both TCP and UDP
         success_tcp, output_tcp = safe_run_command([ss_bin, '-tuln'])
+        # 使用正则表达式精确匹配端口号，防止 80 匹配到 8080
         if success_tcp and re.search(fr'(:{re.escape(str(port))})\s', output_tcp):
             return 'LISTEN'
         return 'FAIL'
@@ -231,7 +229,6 @@ def manage_ip_iptables(ip, action, chain_name=BLOCK_CHAIN):
     """在指定链中添加或移除 IP 阻断规则，并保存规则。"""
     if action == 'check':
         check_cmd = [shutil.which('iptables') or '/sbin/iptables', '-C', chain_name, '-s', ip, '-j', 'DROP']
-        # subprocess.run handles the return code, 0 is success (rule exists)
         result = subprocess.run(check_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=2)
         return result.returncode == 0, "Check complete."
 
@@ -337,6 +334,7 @@ def get_user_current_usage_bytes(username, uid):
     if not success: return 0
     
     # 正则表达式匹配 QUOTA_CHAIN 中带有指定 COMMENT 的规则 (查找 bytes 字段)
+    # 匹配行首可选空格，接着是 packets，接着是 bytes (组 1)，接着是其他
     pattern = re.compile(r'^\s*\s*\d+\s+(\d+).*COMMENT\s+--\s+.*' + re.escape(comment))
     for line in output.split('\n'):
         match = pattern.search(line)
@@ -356,6 +354,7 @@ def reset_iptables_counters(username):
 
 def apply_rate_limit(uid, rate_kbps):
     """使用 Traffic Control (tc) 实现用户的下载带宽限制。"""
+    # ... (从原脚本中移植，确保使用 shutil.which 查找命令) ...
     
     # NEW: Robustly determine primary network device using pure Python/subprocess logic
     success, output = safe_run_command(['ip', 'route', 'show', 'default'])
@@ -370,7 +369,7 @@ def apply_rate_limit(uid, rate_kbps):
             pass
     
     if not dev:
-        print("Error: Could not determine primary network device for tc. Bandwidth limiting disabled.", file=sys.stderr)
+        print("Error: Could not determine primary network device for tc. Bandwidth limiting disabled.")
         return False, "无法找到网络接口"
     
     dev = dev.strip()
@@ -379,7 +378,7 @@ def apply_rate_limit(uid, rate_kbps):
 
     # IPTables command parts to delete the specific rule
     # Added --wait option for stability
-    ipt_del_cmd = ['iptables', '-t', 'mangle', '-D', 'POSTROUTING', 
+    ipt_del_cmd = [shutil.which('iptables') or '/sbin/iptables', '-t', 'mangle', '-D', 'POSTROUTING', 
                    '-m', 'owner', '--uid-owner', str(uid), 
                    '-j', 'MARK', '--set-mark', str(mark),
                    '--wait']
@@ -390,8 +389,9 @@ def apply_rate_limit(uid, rate_kbps):
         # --- 1. CLEANUP (Critical for reliability) ---
         safe_run_command(ipt_del_cmd)
         # Delete TC filter and class (order matters: filter before class)
-        safe_run_command(['tc', 'filter', 'del', 'dev', dev, 'parent', '1:', 'protocol', 'ip', 'prio', '100', 'handle', str(mark), 'fw']) # Added 'fw' to specify the filter type
-        safe_run_command(['tc', 'class', 'del', 'dev', dev, 'parent', '1:', 'classid', tc_handle])
+        tc_bin = shutil.which('tc') or '/sbin/tc'
+        safe_run_command([tc_bin, 'filter', 'del', 'dev', dev, 'parent', '1:', 'protocol', 'ip', 'prio', '100', 'handle', str(mark), 'fw']) # Added 'fw' to specify the filter type
+        safe_run_command([tc_bin, 'class', 'del', 'dev', dev, 'parent', '1:', 'classid', tc_handle])
 
 
         if rate > 0:
@@ -400,7 +400,7 @@ def apply_rate_limit(uid, rate_kbps):
             rate_str = f"{rate_kbit}kbit" 
             
             # --- 2. ADD TC CLASS (Bandwidth limit container) ---
-            tc_class_cmd = ['tc', 'class', 'add', 'dev', dev, 'parent', '1:', 'classid', tc_handle, 'htb', 'rate', rate_str, 'ceil', rate_str]
+            tc_class_cmd = [tc_bin, 'class', 'add', 'dev', dev, 'parent', '1:', 'classid', tc_handle, 'htb', 'rate', rate_str, 'ceil', rate_str]
             
             success_class, output_class = safe_run_command(tc_class_cmd)
             if not success_class:
@@ -408,23 +408,23 @@ def apply_rate_limit(uid, rate_kbps):
 
             # --- 3. ADD IPTABLES RULE (Mark packets from this UID) ---
             # Added --wait option for stability
-            iptables_add_cmd = ['iptables', '-t', 'mangle', '-A', 'POSTROUTING', 
+            iptables_add_cmd = [shutil.which('iptables') or '/sbin/iptables', '-t', 'mangle', '-A', 'POSTROUTING', 
                                  '-m', 'owner', '--uid-owner', str(uid), 
                                  '-j', 'MARK', '--set-mark', str(mark),
                                  '--wait']
 
             success_ipt, output_ipt = safe_run_command(iptables_add_cmd)
             if not success_ipt:
-                safe_run_command(['tc', 'class', 'del', 'dev', dev, 'parent', '1:', 'classid', tc_handle])
+                safe_run_command([tc_bin, 'class', 'del', 'dev', dev, 'parent', '1:', 'classid', tc_handle])
                 return False, f"IPTables error: {output_ipt}"
 
             # --- 4. ADD TC FILTER (Match firewall mark) ---
-            tc_filter_cmd = ['tc', 'filter', 'add', 'dev', dev, 'parent', '1:', 'protocol', 'ip', 
-                              'prio', '100', 'handle', str(mark), 'fw', 'flowid', tc_handle]
+            tc_filter_cmd = [tc_bin, 'filter', 'add', 'dev', dev, 'parent', '1:', 'protocol', 'ip', 
+                             'prio', '100', 'handle', str(mark), 'fw', 'flowid', tc_handle]
             
             success_filter, output_filter = safe_run_command(tc_filter_cmd)
             if not success_filter:
-                safe_run_command(['tc', 'class', 'del', 'dev', dev, 'parent', '1:', 'classid', tc_handle])
+                safe_run_command([tc_bin, 'class', 'del', 'dev', dev, 'parent', '1:', 'classid', tc_handle])
                 safe_run_command(ipt_del_cmd)
                 return False, f"TC Filter error: {output_filter}"
                 
@@ -444,11 +444,70 @@ def get_user_active_connections(username):
     return int(output) if success and output.isdigit() else 0
 
 
+def get_user_sshd_pids(username):
+    """获取指定用户的活跃 SSHD 进程 ID 列表。"""
+    success, output = safe_run_command([shutil.which('pgrep') or '/usr/bin/pgrep', '-u', username, 'sshd'])
+    if success and output:
+        return [int(p) for p in output.split() if p.isdigit()]
+    return []
+
+def get_all_active_external_ips():
+    """
+    获取连接到 WSS/Stunnel 端口的所有外部客户端 IP。
+    """
+    ss_bin = shutil.which('ss') or '/bin/ss'
+    EXTERNAL_PORTS = [WSS_HTTP_PORT, WSS_TLS_PORT, STUNNEL_PORT]
+    # 将端口转换为字符串集合
+    EXTERNAL_PORTS_STR = set(str(p) for p in EXTERNAL_PORTS)
+    active_ips = set()
+    
+    try:
+        success_ss, ss_output = safe_run_command([ss_bin, '-tan'])
+        if not success_ss: 
+            return {"error": f"Failed to run ss: {ss_output}"}
+        
+        for line in ss_output.split('\n'):
+            if 'ESTAB' not in line: continue
+            
+            parts = line.split()
+            if len(parts) < 5: continue
+            
+            local_addr_port = parts[3]
+            remote_addr_port = parts[4]
+            
+            try:
+                local_port = local_addr_port.split(':')[-1]
+                client_ip = remote_addr_port.split(':')[0]
+
+                is_internal_ssh_conn = remote_addr_port.startswith('127.0.0.1')
+
+                is_on_external_port = local_port in EXTERNAL_PORTS_STR
+                
+            except Exception:
+                continue
+
+            if is_on_external_port and not is_internal_ssh_conn:
+                
+                if client_ip not in ('127.0.0.1', '::1', '0.0.0.0', '[::]'):
+                    active_ips.add(client_ip)
+                    
+    except Exception as e:
+        return {"error": f"Execution error: {str(e)}"}
+    
+    # 格式化并检查封禁状态
+    ip_list = []
+    for ip in sorted(list(active_ips)): # 排序以便于前端显示
+        is_banned = manage_ip_iptables(ip, 'check')[0]
+        ip_list.append({
+            'ip': ip,
+            'is_banned': is_banned
+        })
+    return ip_list
+
 def get_user_active_sessions_info(username):
     """
     【基于日志的关联】通过匹配 WSS 日志，来获取用户的客户端 IP。
     """
-    INTERNAL_PORT_STR = str(INTERNAL_FORWARD_PORT)
     
     user_pids = get_user_sshd_pids(username)
     
@@ -489,66 +548,6 @@ def get_user_active_sessions_info(username):
     ip_list = [json.loads(s) for s in active_ips]
     
     return {'sshd_pids': user_pids, 'active_ips': ip_list}
-
-def get_user_sshd_pids(username):
-    """获取指定用户的活跃 SSHD 进程 ID 列表。"""
-    success, output = safe_run_command([shutil.which('pgrep') or '/usr/bin/pgrep', '-u', username, 'sshd'])
-    if success and output:
-        return [int(p) for p in output.split() if p.isdigit()]
-    return []
-
-def get_all_active_external_ips():
-    """
-    获取连接到 WSS/Stunnel 端口的所有外部客户端 IP。
-    """
-    ss_bin = shutil.which('ss') or '/bin/ss'
-    EXTERNAL_PORTS = [WSS_HTTP_PORT, WSS_TLS_PORT, STUNNEL_PORT]
-    # 将端口转换为字符串集合
-    EXTERNAL_PORTS_STR = set(str(p) for p in EXTERNAL_PORTS)
-    active_ips = set()
-    
-    try:
-        success_ss, ss_output = safe_run_command([ss_bin, '-tan'])
-        if not success_ss: 
-            return {"error": f"Failed to run ss: {ss_output}"}
-            
-        for line in ss_output.split('\n'):
-            if 'ESTAB' not in line: continue
-            
-            parts = line.split()
-            if len(parts) < 5: continue
-            
-            local_addr_port = parts[3]
-            remote_addr_port = parts[4]
-            
-            try:
-                local_port = local_addr_port.split(':')[-1]
-                client_ip = remote_addr_port.split(':')[0]
-
-                is_internal_ssh_conn = remote_addr_port.startswith('127.0.0.1')
-
-                is_on_external_port = local_port in EXTERNAL_PORTS_STR
-                
-            except Exception:
-                continue
-
-            if is_on_external_port and not is_internal_ssh_conn:
-                
-                if client_ip not in ('127.0.0.1', '::1', '0.0.0.0', '[::]'):
-                    active_ips.add(client_ip)
-                    
-    except Exception as e:
-        return {"error": f"Execution error: {str(e)}"}
-    
-    # 格式化并检查封禁状态
-    ip_list = []
-    for ip in sorted(list(active_ips)): # 排序以便于前端显示
-        is_banned = manage_ip_iptables(ip, 'check')[0]
-        ip_list.append({
-            'ip': ip,
-            'is_banned': is_banned
-        })
-    return ip_list
 
 
 def sync_user_status(user):
@@ -606,7 +605,7 @@ def sync_user_status(user):
     # --- 规则同步 (始终确保规则状态与配额匹配) ---
     apply_rate_limit(uid, user.get('rate_limit_kbps', '0'))
     
-    # 只有当用户状态不为 'exceeded' 时，才应该添加 quota 规则，防止用户继续使用（通过 iptables DROP 规则实现）
+    # 只有当用户状态不为 'exceeded' 时，才应该添加 quota RETURN 规则，否则流量会被 DROP
     if user['status'] != 'exceeded' and quota_limit_bytes > 0:
         manage_quota_iptables_rule(username, uid, 'add', quota_limit_bytes)
     elif user['status'] != 'exceeded' and quota_limit_bytes == 0:
@@ -618,8 +617,7 @@ def sync_user_status(user):
     # --- 活跃连接和流量分配 (面板显示) ---
     active_conns = get_user_active_connections(username)
     user['active_connections'] = active_conns
-    # 速度模拟，基于连接数
-    user['realtime_speed'] = random.randint(300, 700) * active_conns 
+    user['realtime_speed'] = random.randint(300, 700) * active_conns # 模拟实时速度
     
     return user
 
@@ -676,7 +674,6 @@ def refresh_all_user_status(users):
 def render_dashboard():
     """手动读取 HTML 文件并进行 Jinja2 渲染。"""
     try:
-        # HTML 文件由 deploy.sh 复制到这个路径
         with open(PANEL_HTML_PATH, 'r', encoding='utf-8') as f:
             html_content = f.read()
     except FileNotFoundError:
@@ -701,13 +698,10 @@ def render_dashboard():
 
 # --- Web 路由 ---
 
+# 页面路由（需要登录保护）
 @app.route('/', methods=['GET'])
-def dashboard():
-    # 使用函数名，因为装饰器会将其重命名
-    return decorated_dashboard() 
-
 @login_required
-def decorated_dashboard():
+def dashboard():
     html_content, status_code = render_dashboard()
     return make_response(html_content, status_code)
 
@@ -736,13 +730,13 @@ def login():
                     pass
             
             if not authenticated and HAS_CRYPT and root_hash.startswith('$'):
-                 # 尝试 crypt 验证（通常是 $6$ 或 $5$ 开头的）
-                 try:
-                     if crypt.crypt(password_raw, root_hash) == root_hash:
-                         authenticated = True
-                         print("Warning: Logged in with crypt hash.", file=sys.stderr)
-                 except Exception:
-                     pass
+                # 尝试 crypt 验证（通常是 $6$ 或 $5$ 开头的）
+                try:
+                    if crypt.crypt(password_raw, root_hash) == root_hash:
+                        authenticated = True
+                        print("Warning: Logged in with crypt hash.", file=sys.stderr)
+                except Exception:
+                    pass
 
             if not authenticated and len(root_hash) == 64:
                 # 尝试 SHA256 校验 (如果 hash 长度匹配且之前都没有通过)
@@ -755,7 +749,7 @@ def login():
                 session['logged_in'] = True
                 session['username'] = ROOT_USERNAME
                 log_action("LOGIN_SUCCESS", ROOT_USERNAME, "Web UI Login")
-                return redirect(url_for('decorated_dashboard'))
+                return redirect(url_for('dashboard'))
             else:
                 error = '用户名或密码错误。'
                 log_action("LOGIN_FAILED", username, "Wrong credentials")
@@ -1009,9 +1003,9 @@ def toggle_user_status_api():
     # 如果状态被手动更改，则需要同步系统状态
     if old_status != users[index]['status']:
         users[index] = sync_user_status(users[index])
-        save_users(users)
-        kill_user_sessions(username)
-    
+    save_users(users)
+    kill_user_sessions(username)
+        
     return jsonify({"success": True, "message": f"用户组 {username} 状态已更新为 {action}，连接已断开。"})
 
 @app.route('/api/users/set_settings', methods=['POST'])
@@ -1094,7 +1088,8 @@ def reset_user_traffic_api():
     users = load_users()
     user, index = get_user(username) # 重新获取用户
     if user:
-        users[index] = sync_user_status(user)
+        users[index]['usage_gb'] = 0.0 # 强制设为 0
+        users[index] = sync_user_status(users[index])
         save_users(users)
     
     log_action("USER_TRAFFIC_RESET", session.get('username', 'root'), f"Traffic counter for user {username} reset to 0.")
@@ -1189,9 +1184,7 @@ def get_ip_debug_info():
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
     
-    # 注意：这里不需要再次设置 os.environ，因为 systemd 服务文件已经设置了它们。
-    # 仅需确保 Flask 能正常运行即可。
-    
+    # 打印启动信息
     print(f"WSS Panel running on port {PANEL_PORT}")
     try:
         app.run(host='0.0.0.0', port=int(PANEL_PORT), debug=False)
