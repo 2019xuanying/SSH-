@@ -5,7 +5,7 @@ import subprocess
 import os
 import hashlib
 import time
-import jinja2 # 引入 Jinja2
+import jinja2
 import re
 import random
 from datetime import date, timedelta, datetime
@@ -27,6 +27,7 @@ except ImportError:
     pass
     
 try:
+    # crypt 是 Python 的标准库模块，不需要 pip 安装
     import crypt
     HAS_CRYPT = True
 except ImportError:
@@ -149,12 +150,20 @@ def login_required(f):
     decorated_function.__name__ = f.__name__ + "_decorated"
     return decorated_function
 
-# --- 系统命令执行和状态函数 (保持不变) ---
+# --- 系统命令执行和状态函数 (核心修改) ---
 def safe_run_command(command, input_data=None):
     """
     安全运行系统命令。
-    此版本将忽略 stderr，除非返回码明确表示失败，以解决 ss 等命令在不同系统上将表头/警告输出到 stderr 的兼容性问题。
+    此版本将使用 shutil.which 确定命令的绝对路径，增强鲁棒性。
     """
+    # 尝试查找命令的绝对路径
+    cmd_path = shutil.which(command[0])
+    if not cmd_path:
+        return False, f"Command not found: {command[0]}"
+    
+    # 替换命令列表中的第一个元素为绝对路径
+    command[0] = cmd_path
+
     try:
         process = subprocess.run(
             command, 
@@ -173,17 +182,15 @@ def safe_run_command(command, input_data=None):
                 return True, stdout
             
             # 如果是其他非零返回码，返回失败
-            return False, stderr or f"Command failed with code {process.returncode}"
+            return False, stderr or f"Command '{' '.join(command)}' failed with code {process.returncode}. Stderr: {stderr}"
         
         # 成功执行
         return True, stdout
         
     except subprocess.TimeoutExpired:
-        return False, "Command timed out"
-    except FileNotFoundError:
-        return False, f"Command not found: {command[0]}"
+        return False, f"Command '{' '.join(command)}' timed out"
     except Exception as e:
-        return False, f"Execution error: {str(e)}"
+        return False, f"Execution error for '{' '.join(command)}': {str(e)}"
 
 def get_user(username):
     users = load_users()
@@ -232,17 +239,17 @@ def kill_user_sessions(username):
 def manage_ip_iptables(ip, action, chain_name=BLOCK_CHAIN):
     """在指定链中添加或移除 IP 阻断规则，并保存规则。"""
     if action == 'check':
-        check_cmd = [shutil.which('iptables') or '/sbin/iptables', '-C', chain_name, '-s', ip, '-j', 'DROP']
+        check_cmd = ['iptables', '-C', chain_name, '-s', ip, '-j', 'DROP']
         # subprocess.run handles the return code, 0 is success (rule exists)
         result = subprocess.run(check_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=2)
         return result.returncode == 0, "Check complete."
 
     if action == 'block':
         # 先删除可能存在的旧规则，再插入新规则到最前面 (I 1)
-        safe_run_command([shutil.which('iptables') or '/sbin/iptables', '-D', chain_name, '-s', ip, '-j', 'DROP'])
-        command = [shutil.which('iptables') or '/sbin/iptables', '-I', chain_name, '1', '-s', ip, '-j', 'DROP']
+        safe_run_command(['iptables', '-D', chain_name, '-s', ip, '-j', 'DROP'])
+        command = ['iptables', '-I', chain_name, '1', '-s', ip, '-j', 'DROP']
     elif action == 'unblock':
-        command = [shutil.which('iptables') or '/sbin/iptables', '-D', chain_name, '-s', ip, '-j', 'DROP']
+        command = ['iptables', '-D', chain_name, '-s', ip, '-j', 'DROP']
     else: return False, "Invalid action"
 
     success, output = safe_run_command(command)
@@ -253,16 +260,17 @@ def manage_ip_iptables(ip, action, chain_name=BLOCK_CHAIN):
             rules_v4_path = '/etc/iptables/rules.v4'
             rules_v4_dir = os.path.dirname(rules_v4_path)
             
+            # 使用绝对路径执行 iptables-save
             if os.path.exists(rules_v4_dir):
                 with open(rules_v4_path, 'w') as f:
                     subprocess.run([iptables_save_path], stdout=f, check=True, timeout=3)
         except Exception as e:
-            print(f"Warning: Failed to save iptables rules: {e}")
+            print(f"Warning: Failed to save iptables rules: {e}", file=sys.stderr)
             pass
             
     return success, output
 
-# --- 流量管控 (Quota/Rate Limit) 逻辑 (性能优化) ---
+# --- 流量管控 (Quota/Rate Limit) 逻辑 (增强错误日志) ---
 
 def manage_quota_iptables_rule(username, uid, action='add', quota_limit_bytes=0):
     """管理用户的 IPTables 流量配额和计数规则。"""
@@ -297,27 +305,34 @@ def manage_quota_iptables_rule(username, uid, action='add', quota_limit_bytes=0)
     if action == 'add' or action == 'modify':
         if quota_limit_bytes > 0:
             # 规则 1: 在配额内允许通过 (RETURN)
-            command_quota = [iptables_bin, '-A', QUOTA_CHAIN] + base_rule + ['-m', 'quota', '--quota', str(quota_limit_bytes), '-j', 'RETURN']
+            command_quota = ['iptables', '-A', QUOTA_CHAIN] + base_rule + ['-m', 'quota', '--quota', str(quota_limit_bytes), '-j', 'RETURN']
             success, output = safe_run_command(command_quota)
-            if not success: return False, f"Quota rule setup (RETURN) failed: {output}"
+            if not success: 
+                print(f"Error setting QUOTA RETURN rule for {username}: {output}", file=sys.stderr) # NEW LOGGING
+                return False, f"Quota rule setup (RETURN) failed: {output}"
             
             # 规则 2: 超出配额拒绝 (DROP)
-            command_drop = [iptables_bin, '-A', QUOTA_CHAIN] + base_rule + ['-j', 'DROP']
+            command_drop = ['iptables', '-A', QUOTA_CHAIN] + base_rule + ['-j', 'DROP']
             success_drop, output_drop = safe_run_command(command_drop)
-            if not success_drop: return False, f"Quota rule setup (DROP) failed: {output_drop}"
+            if not success_drop: 
+                print(f"Error setting QUOTA DROP rule for {username}: {output_drop}", file=sys.stderr) # NEW LOGGING
+                return False, f"Quota rule setup (DROP) failed: {output_drop}"
         else:
             # 无限流量: 仅添加计数规则 (RETURN)，用于获取流量数据
-            command_return = [iptables_bin, '-A', QUOTA_CHAIN] + base_rule + ['-j', 'RETURN']
+            command_return = ['iptables', '-A', QUOTA_CHAIN] + base_rule + ['-j', 'RETURN']
             success, output = safe_run_command(command_return)
-            if not success: return False, f"Quota count rule failed: {output}"
+            if not success: 
+                print(f"Error setting QUOTA COUNT rule for {username}: {output}", file=sys.stderr) # NEW LOGGING
+                return False, f"Quota count rule failed: {output}"
             
         # 每次更改后保存 IPTables 规则
         try:
             iptables_save_path = shutil.which('iptables-save') or '/sbin/iptables-save'
             rules_v4_path = '/etc/iptables/rules.v4'
-            with open(rules_v4_path, 'w') as f:
-                subprocess.run([iptables_save_path], stdout=f, check=True, timeout=3)
-        except Exception:
+            # 确保使用绝对路径，并捕获保存错误
+            subprocess.run([iptables_save_path], stdout=open(rules_v4_path, 'w'), check=True, timeout=3)
+        except Exception as e:
+            print(f"Warning: Failed to save iptables rules after rule modification: {e}", file=sys.stderr)
             pass
             
         return True, "Quota rule updated."
@@ -331,34 +346,43 @@ def get_user_current_usage_bytes(username, uid):
     comment = f"WSS_QUOTA_{username}"
     # 获取计数：使用 -Lnvx，只列出匹配到的规则。
     command_get = [
-        shutil.which('iptables') or '/sbin/iptables', 
+        'iptables', 
         '-t', 'filter', 
         '-nvxL', QUOTA_CHAIN
     ]
     success, output = safe_run_command(command_get)
-    if not success: return 0
+    if not success: 
+        print(f"Error executing iptables to get usage for {username}: {output}", file=sys.stderr)
+        return 0
     
     # 正则表达式匹配 QUOTA_CHAIN 中带有指定 COMMENT 的规则 (查找 bytes 字段)
-    pattern = re.compile(r'^\s*\s*\d+\s+(\d+).*COMMENT\s+--\s+.*' + re.escape(comment))
+    # iptables -nvxL 输出格式通常是: pkts bytes target prot opt in out source destination ... comment
+    # 我们关注的是第二个字段: bytes
+    pattern = re.compile(r'^\s*[\d]+\s+([\d]+).*COMMENT\s+--\s+.*' + re.escape(comment))
     for line in output.split('\n'):
         match = pattern.search(line)
         if match:
             # 返回匹配到的字节数
-            try: return int(match.group(1)) 
-            except (IndexError, ValueError): return 0
+            try: 
+                # 检查流量限制规则 (RETURN 目标) 或 DROP 规则，他们都有计数
+                if 'RETURN' in line or 'DROP' in line:
+                    return int(match.group(1)) 
+            except (IndexError, ValueError): 
+                return 0 
+    
+    # 如果找不到匹配的行（例如，规则被删除或尚未创建），返回 0
     return 0
     
 def reset_iptables_counters(username):
     """重置指定用户名的 IPTables 计数器。"""
     comment = f"WSS_QUOTA_{username}"
     # 使用 -Z (Zero) 命令重置计数器
-    command = [shutil.which('iptables') or '/sbin/iptables', '-t', 'filter', '-Z', QUOTA_CHAIN, '-m', 'comment', '--comment', comment]
+    command = ['iptables', '-t', 'filter', '-Z', QUOTA_CHAIN, '-m', 'comment', '--comment', comment]
     safe_run_command(command) # 忽略错误，因为如果规则不存在，它会报错
 
 
 def apply_rate_limit(uid, rate_kbps):
     """使用 Traffic Control (tc) 实现用户的下载带宽限制。"""
-    # ... (与原脚本中的 apply_rate_limit 逻辑相同，但已移至 Python，避免 Bash 注入问题) ...
     
     # NEW: Robustly determine primary network device using pure Python/subprocess logic
     success, output = safe_run_command(['ip', 'route', 'show', 'default'])
@@ -373,7 +397,7 @@ def apply_rate_limit(uid, rate_kbps):
             pass
     
     if not dev:
-        print("Error: Could not determine primary network device for tc. Bandwidth limiting disabled.")
+        print("Error: Could not determine primary network device for tc. Bandwidth limiting disabled.", file=sys.stderr)
         return False, "无法找到网络接口"
     
     dev = dev.strip()
@@ -407,6 +431,7 @@ def apply_rate_limit(uid, rate_kbps):
             
             success_class, output_class = safe_run_command(tc_class_cmd)
             if not success_class:
+                print(f"TC Class error for {username}: {output_class}", file=sys.stderr)
                 return False, f"TC Class error: {output_class}"
 
             # --- 3. ADD IPTABLES RULE (Mark packets from this UID) ---
@@ -418,6 +443,7 @@ def apply_rate_limit(uid, rate_kbps):
 
             success_ipt, output_ipt = safe_run_command(iptables_add_cmd)
             if not success_ipt:
+                print(f"IPTables error for {username}: {output_ipt}", file=sys.stderr)
                 safe_run_command(['tc', 'class', 'del', 'dev', dev, 'parent', '1:', 'classid', tc_handle])
                 return False, f"IPTables error: {output_ipt}"
 
@@ -427,6 +453,7 @@ def apply_rate_limit(uid, rate_kbps):
             
             success_filter, output_filter = safe_run_command(tc_filter_cmd)
             if not success_filter:
+                print(f"TC Filter error for {username}: {output_filter}", file=sys.stderr)
                 safe_run_command(['tc', 'class', 'del', 'dev', dev, 'parent', '1:', 'classid', tc_handle])
                 safe_run_command(ipt_del_cmd)
                 return False, f"TC Filter error: {output_filter}"
@@ -437,13 +464,14 @@ def apply_rate_limit(uid, rate_kbps):
             return True, "已清除速度限制"
             
     except Exception as e:
+        print(f"TC command execution failed: {e}", file=sys.stderr)
         return False, f"TC command execution failed: {e}"
 
 
 def get_user_active_connections(username):
     """【新逻辑】获取指定用户的活跃 SSHD 会话数量 (使用 pgrep)。"""
     # 简化：仅返回 SSHD 进程数量
-    success, output = safe_run_command([shutil.which('pgrep') or '/usr/bin/pgrep', '-c', '-u', username, 'sshd'])
+    success, output = safe_run_command(['pgrep', '-c', '-u', username, 'sshd'])
     return int(output) if success and output.isdigit() else 0
 
 
@@ -465,7 +493,7 @@ def get_user_active_sessions_info(username):
     if os.path.exists(WSS_LOG_FILE):
         try:
             # 1. 读取最近 200 行 WSS 日志
-            command_tail = [shutil.which('tail') or '/usr/bin/tail', '-n', '200', WSS_LOG_FILE]
+            command_tail = ['tail', '-n', '200', WSS_LOG_FILE]
             success_tail, log_output = safe_run_command(command_tail)
             
             # 2. 从日志中提取 IPs
@@ -496,7 +524,7 @@ def get_user_active_sessions_info(username):
 
 def get_user_sshd_pids(username):
     """获取指定用户的活跃 SSHD 进程 ID 列表。"""
-    success, output = safe_run_command([shutil.which('pgrep') or '/usr/bin/pgrep', '-u', username, 'sshd'])
+    success, output = safe_run_command(['pgrep', '-u', username, 'sshd'])
     if success and output:
         return [int(p) for p in output.split() if p.isdigit()]
     return []
@@ -512,7 +540,7 @@ def get_all_active_external_ips():
     active_ips = set()
     
     try:
-        success_ss, ss_output = safe_run_command([ss_bin, '-tan'])
+        success_ss, ss_output = safe_run_command(['ss', '-tan'])
         if not success_ss: 
             return {"error": f"Failed to run ss: {ss_output}"}
         
@@ -586,23 +614,23 @@ def sync_user_status(user):
     
     # --- 系统锁定状态检查 ---
     system_locked = False
-    success_status, output_status = safe_run_command([shutil.which('passwd') or '/usr/bin/passwd', '-S', username])
+    success_status, output_status = safe_run_command(['passwd', '-S', username])
     if success_status and output_status and ' L ' in output_status: system_locked = True
     
     # --- 状态同步（usermod）---
     if should_be_locked and not system_locked:
-        safe_run_command([shutil.which('usermod') or '/usr/sbin/usermod', '-L', username])
+        safe_run_command(['usermod', '-L', username])
         # 强制设置一个过期时间，确保系统锁定
-        safe_run_command([shutil.which('chage') or '/usr/bin/chage', '-E', '1970-01-01', username]) 
+        safe_run_command(['chage', '-E', '1970-01-01', username]) 
         kill_user_sessions(username)
         if is_expired: user['status'] = 'expired'
         elif is_over_quota: user['status'] = 'exceeded'
         else: user['status'] = 'paused'
     elif not should_be_locked and system_locked:
-        safe_run_command([shutil.which('usermod') or '/usr/sbin/usermod', '-U', username])
+        safe_run_command(['usermod', '-U', username])
         # 恢复或设置正确的过期时间
         if user.get('expiration_date'):
-             safe_run_command([shutil.which('chage') or '/usr/bin/chage', '-E', user['expiration_date'], username])
+             safe_run_command(['chage', '-E', user['expiration_date'], username])
         user['status'] = 'active'
     elif not should_be_locked and not system_locked:
         user['status'] = 'active'
@@ -842,7 +870,7 @@ def control_system_service():
     service = data.get('service')
     action = data.get('action')
     if service not in CORE_SERVICES or action != 'restart': return jsonify({"success": False, "message": "无效的服务或操作"}), 400
-    command = [shutil.which('systemctl') or '/bin/systemctl', action, service]
+    command = ['systemctl', action, service]
     success, output = safe_run_command(command)
     if success:
         log_action("SERVICE_CONTROL_SUCCESS", session.get('username', 'root'), f"Successfully executed {action} on {service}")
@@ -907,26 +935,26 @@ def add_user_api():
     if get_user(username)[0]: return jsonify({"success": False, "message": f"用户组 {username} 已存在于面板"}), 409
     
     # 1. 创建系统用户
-    success, output = safe_run_command([shutil.which('useradd') or '/usr/sbin/useradd', '-m', '-s', '/bin/false', username])
+    success, output = safe_run_command(['useradd', '-m', '-s', '/bin/false', username])
     if not success and "already exists" not in output:
         log_action("USER_ADD_FAIL", session.get('username', 'root'), f"Failed to create system user {username}: {output}")
         return jsonify({"success": False, "message": f"创建系统用户失败: {output}"}), 500
 
     # 2. 设置密码
     chpasswd_input = f"{username}:{password_raw}"
-    success, output = safe_run_command([shutil.which('chpasswd') or '/usr/sbin/chpasswd'], input_data=chpasswd_input)
+    success, output = safe_run_command(['chpasswd'], input_data=chpasswd_input)
     if not success:
-        safe_run_command([shutil.which('userdel') or '/usr/sbin/userdel', '-r', username])
+        safe_run_command(['userdel', '-r', username])
         log_action("USER_ADD_FAIL", session.get('username', 'root'), f"Failed to set password for {username}: {output}")
         return jsonify({"success": False, "message": f"设置密码失败: {output}"}), 500
         
     # 3. 设置有效期
     expiry_date = (date.today() + timedelta(days=int(expiration_days))).strftime('%Y-%m-%d')
-    safe_run_command([shutil.which('chage') or '/usr/bin/chage', '-E', expiry_date, username])
+    safe_run_command(['chage', '-E', expiry_date, username])
     
     uid = get_user_uid(username)
     if not uid:
-        safe_run_command([shutil.which('userdel') or '/usr/sbin/userdel', '-r', username])
+        safe_run_command(['userdel', '-r', username])
         return jsonify({"success": False, "message": "无法获取用户UID"}), 500
         
     # 4. 添加到面板 DB
@@ -967,7 +995,7 @@ def delete_user_api():
         apply_rate_limit(uid, 0)
         manage_quota_iptables_rule(username, uid, 'delete')
         # 删除系统用户
-        success, output = safe_run_command([shutil.which('userdel') or '/usr/sbin/userdel', '-r', username])
+        success, output = safe_run_command(['userdel', '-r', username])
         if not success and "user not found" not in output:
             log_action("USER_DELETE_WARNING", session.get('username', 'root'), f"System user {username} deletion failed (non-fatal): {output}")
     
@@ -1030,7 +1058,7 @@ def update_user_settings_api():
     password_log = ""
     if new_ssh_password:
         chpasswd_input = f"{username}:{new_ssh_password}"
-        success, output = safe_run_command([shutil.which('chpasswd') or '/usr/sbin/chpasswd'], input_data=chpasswd_input)
+        success, output = safe_run_command(['chpasswd'], input_data=chpasswd_input)
         if success:
             password_log = ", SSH password changed. All sessions killed."
             kill_user_sessions(username)
@@ -1044,7 +1072,7 @@ def update_user_settings_api():
     users[index]['rate_kbps'] = rate
     
     # 更新系统有效期
-    safe_run_command([shutil.which('chage') or '/usr/bin/chage', '-E', expiry_date, username])
+    safe_run_command(['chage', '-E', expiry_date, username])
     
     # 同步系统状态和规则
     users[index] = sync_user_status(users[index])
@@ -1155,13 +1183,12 @@ def get_ip_debug_info():
     username = request.args.get('username')
     
     # 1. 获取 ss -tanp 原始输出
-    ss_bin = shutil.which('ss') or '/bin/ss'
-    success_ss, ss_output = safe_run_command([ss_bin, '-tanp'])
+    success_ss, ss_output = safe_run_command(['ss', '-tanp'])
 
     # 2. 获取 WSS 日志 (最近 100 行)
     log_content = "Log file not found or failed to read."
     try:
-        command_tail = [shutil.which('tail') or '/usr/bin/tail', '-n', '100', WSS_LOG_FILE]
+        command_tail = ['tail', '-n', '100', WSS_LOG_FILE]
         success_tail, log_output = safe_run_command(command_tail)
         if success_tail:
             log_content = log_output
