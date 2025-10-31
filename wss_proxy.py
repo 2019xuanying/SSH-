@@ -24,6 +24,11 @@ LISTEN_ADDR = '0.0.0.0'
 # 从环境变量获取日志文件路径，用于流量关联
 WSS_LOG_FILE = os.environ.get('WSS_LOG_FILE_ENV', '/var/log/wss.log')
 
+# NEW V1: Host 白名单配置文件路径
+PANEL_DIR = os.environ.get('PANEL_DIR_ENV', '/etc/wss-panel') # 假设面板目录已通过 env 传递
+HOSTS_DB_PATH = os.path.join(PANEL_DIR, 'hosts.json') 
+HOST_WHITELIST = set() # 全局集合，用于存储白名单 Host
+
 # 从命令行参数获取端口 (ExecStart=/usr/bin/python3 /.../wss $WSS_HTTP_PORT $WSS_TLS_PORT $INTERNAL_FORWARD_PORT)
 try:
     HTTP_PORT = int(sys.argv[1])
@@ -47,6 +52,68 @@ KEY_FILE = '/etc/stunnel/certs/stunnel.key'
 FIRST_RESPONSE = b'HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\n\r\nOK\r\n\r\n'
 SWITCH_RESPONSE = b'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n'
 FORBIDDEN_RESPONSE = b'HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n'
+
+
+def load_host_whitelist():
+    """从 hosts.json 文件加载 Host 白名单列表。"""
+    global HOST_WHITELIST
+    try:
+        if not os.path.exists(HOSTS_DB_PATH):
+            print("Warning: Host whitelist file not found. Allow all Hosts.", file=sys.stderr)
+            HOST_WHITELIST = set()
+            return
+            
+        with open(HOSTS_DB_PATH, 'r') as f:
+            hosts = json.load(f)
+            # 确保 hosts 是一个列表，并转换为小写集合
+            if isinstance(hosts, list):
+                # 清除可能带有的端口号，并转换为小写
+                clean_hosts = set()
+                for host in hosts:
+                    if not isinstance(host, str): continue
+                    host = host.strip().lower()
+                    if ':' in host:
+                        host = host.split(':')[0]
+                    clean_hosts.add(host)
+                    
+                HOST_WHITELIST = clean_hosts
+                print(f"Host Whitelist loaded successfully. Count: {len(HOST_WHITELIST)}", file=sys.stderr)
+            else:
+                HOST_WHITELIST = set()
+                print("Warning: Host whitelist file format error (not a list). Allow all Hosts.", file=sys.stderr)
+    except Exception as e:
+        HOST_WHITELIST = set()
+        print(f"Error loading Host Whitelist: {e}. Allow all Hosts.", file=sys.stderr)
+
+def check_host(headers):
+    """从头部字符串中提取 Host 并检查是否在白名单内。"""
+    # 1. 提取 Host 头部
+    host_match = re.search(r'Host:\s*([^\s\r\n]+)', headers, re.IGNORECASE)
+    
+    # 2. 如果 Host 头部缺失，或者白名单为空，则允许通过
+    if not host_match:
+        # 兼容性模式: Host 头部缺失，允许通过，但最好检查
+        return True 
+
+    requested_host_raw = host_match.group(1).strip().lower()
+    
+    # 3. 移除端口号
+    if ':' in requested_host_raw:
+        requested_host = requested_host_raw.split(':')[0]
+    else:
+        requested_host = requested_host_raw
+        
+    # 4. 执行校验
+    if not HOST_WHITELIST:
+        # 如果 HOST_WHITELIST 为空，则表示未配置，默认允许所有 Host
+        return True
+        
+    if requested_host in HOST_WHITELIST:
+        return True
+    else:
+        print(f"Host check failed for: {requested_host}. Access denied.", file=sys.stderr)
+        return False
+
 
 def log_connection(client_ip, client_port, local_port):
     """将连接信息记录到 WSS 日志文件，用于面板的 IP 关联。"""
@@ -91,6 +158,13 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
             data_to_forward = full_request[header_end_index + 4:]
             headers = headers_raw.decode(errors='ignore')
 
+            # NEW V1: Host 白名单校验
+            if not check_host(headers):
+                 writer.write(FORBIDDEN_RESPONSE)
+                 await writer.drain()
+                 # 强制关闭连接
+                 break # 退出握手循环，进入 finally
+
             # 兼容 v2ray/Xray 等客户端的 GET-RAY 或 WebSocket 升级头
             is_websocket_request = 'Upgrade: websocket' in headers or 'Connection: Upgrade' in headers or 'GET-RAY' in headers
             
@@ -107,6 +181,10 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
         
         # --- 退出握手循环 ---
 
+        # 仅当转发成功启动时才继续
+        if not forwarding_started:
+            return 
+            
         # 4. 连接目标服务器
         target = DEFAULT_TARGET
         target_reader, target_writer = await asyncio.open_connection(*target)
@@ -152,6 +230,9 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
             pass
 
 async def main():
+    # NEW V1: 服务启动时，加载 Host 白名单
+    load_host_whitelist()
+    
     # TLS server setup
     ssl_ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
     
