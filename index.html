@@ -329,7 +329,7 @@
                 <button type="button" onclick="closeModal('confirm-modal')" class="bg-gray-300 hover:bg-gray-400 text-gray-800 font-semibold py-2 px-4 rounded-lg shadow-md transition duration-200">取消</button>
                 <button type="button" id="confirm-action-btn" class="bg-red-600 hover:bg-red-700 text-white font-semibold py-2 px-4 rounded-lg shadow-md transition duration-200">确认</button>
             </div>
-            <!-- 隐藏字段用于存储参数，保持原有JS逻辑兼容性 -->
+             <!-- 隐藏字段用于存储参数，保持原有JS逻辑兼容性 -->
             <input type="hidden" id="confirm-param1">
             <input type="hidden" id="confirm-param2">
             <input type="hidden" id="confirm-param3">
@@ -791,7 +791,7 @@
                  // 3. 获取实时连接 IP
                  const ipData = await fetchData('/system/active_ips');
                  if (ipData) {
-                     renderActiveGlobalIPs(ipData.active_ips);
+                    renderActiveGlobalIPs(ipData.active_ips);
                  }
             }
             
