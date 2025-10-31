@@ -15,20 +15,26 @@ import shutil
 import logging
 import sys
 
-# NEW: 尝试导入 bcrypt / crypt (用于密码哈希回退)
+# --- 修正: 确保 HAS_BCRYPT 和 HAS_CRYPT 始终在全局作用域内被定义 ---
+
+# 默认初始化为 False
+HAS_BCRYPT = False
+HAS_CRYPT = False
+
+# 尝试导入 bcrypt
 try:
     import bcrypt
     HAS_BCRYPT = True
 except ImportError:
-    HAS_BCRYPT = False
+    # 尝试导入 crypt 作为回退
     try:
         import crypt
         HAS_CRYPT = True
     except ImportError:
-        HAS_CRYPT = False
+        # crypt 也导入失败，HAS_CRYPT 保持为 False
+        pass
 
-
-# --- 配置 (从环境变量读取，确保分离) ---
+# --- 配置 (从环境变量读取，不再依赖 Bash 替换硬编码) ---
 PANEL_DIR = os.environ.get('PANEL_DIR_ENV', '/etc/wss-panel')
 USER_DB_PATH = os.path.join(PANEL_DIR, 'users.json')
 IP_BANS_DB_PATH = os.path.join(PANEL_DIR, 'ip_bans.json')
@@ -37,7 +43,7 @@ ROOT_HASH_FILE = os.path.join(PANEL_DIR, 'root_hash.txt')
 PANEL_HTML_PATH = os.path.join(PANEL_DIR, 'index.html')
 SECRET_KEY_PATH = os.path.join(PANEL_DIR, 'secret_key.txt')
 WSS_LOG_FILE = os.environ.get('WSS_LOG_FILE_ENV', '/var/log/wss.log')
-
+# [Immersive content redacted for brevity.]
 ROOT_USERNAME = "root"
 GIGA_BYTE = 1024 * 1024 * 1024 # 1 GB in bytes
 BLOCK_CHAIN = "WSS_IP_BLOCK"
@@ -63,12 +69,12 @@ app = Flask(__name__)
 
 # --- 加载持久化的 Secret Key ---
 def load_secret_key():
+# [Immersive content redacted for brevity.]
     try:
         with open(SECRET_KEY_PATH, 'r') as f:
             return f.read().strip()
     except Exception:
         # Fallback to generate a new key if file read fails (unlikely if setup is correct)
-        print("Warning: Failed to load persistent secret key. Generating temporary key.", file=sys.stderr)
         return os.urandom(24).hex() 
 
 app.secret_key = load_secret_key()
@@ -78,6 +84,7 @@ app.secret_key = load_secret_key()
 
 def load_data(path, default_value):
     """加载 JSON 数据。"""
+# [Immersive content redacted for brevity.]
     if not os.path.exists(path): return default_value
     try:
         with open(path, 'r') as f: return json.load(f)
@@ -87,6 +94,7 @@ def load_data(path, default_value):
 
 def save_data(data, path):
     """保存 JSON 数据。"""
+# [Immersive content redacted for brevity.]
     try:
         with open(path, 'w') as f: json.dump(data, f, indent=4)
         return True
@@ -104,6 +112,7 @@ def load_root_hash():
     except Exception: return None
 
 def log_action(action_type, username, details=""):
+# [Immersive content redacted for brevity.]
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     operator_ip = request.remote_addr if request else "127.0.0.1 (System)"
     log_entry = f"[{timestamp}] [USER:{username}] [IP:{operator_ip}] ACTION:{action_type} DETAILS: {details}\n"
@@ -113,10 +122,11 @@ def log_action(action_type, username, details=""):
         print(f"Error writing to audit log: {e}")
 
 def get_recent_audit_logs(n=20):
+# [Immersive content redacted for brevity.]
     try:
         if not os.path.exists(AUDIT_LOG_PATH):
             return ["日志文件不存在。"]
-        # 使用 shutil.which 查找 tail 的路径以提高兼容性
+        # Use python's tail equivalent if shutil.which('tail') is unreliable
         command = [shutil.which('tail') or '/usr/bin/tail', '-n', str(n), AUDIT_LOG_PATH]
         result = subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=2)
         # Fix: Ensure each line is processed correctly, avoiding unexpected symbols
@@ -126,6 +136,7 @@ def get_recent_audit_logs(n=20):
 
 # FIX P7: 修改 login_required 装饰器，API 请求返回 401 JSON 错误
 def login_required(f):
+# [Immersive content redacted for brevity.]
     @wraps(f)
     def decorated_function(*args, **kwargs):
         is_api_request = request.path.startswith('/api/')
@@ -146,34 +157,35 @@ def login_required(f):
 
 # --- 系统命令执行和状态函数 (保持不变) ---
 def safe_run_command(command, input_data=None):
-    """安全运行系统命令。"""
+# [Immersive content redacted for brevity.]
+    """
+    安全运行系统命令。
+    此版本将忽略 stderr，除非返回码明确表示失败，以解决 ss 等命令在不同系统上将表头/警告输出到 stderr 的兼容性问题。
+    """
     try:
-        # 使用 Popen 和 communicate 处理输入/输出/超时
-        process = subprocess.Popen(
+        process = subprocess.run(
             command, 
-            stdout=subprocess.PIPE, 
-            stderr=subprocess.PIPE,
-            stdin=subprocess.PIPE if input_data is not None else None,
+            capture_output=True, 
             text=True, 
-            encoding='utf-8'
+            encoding='utf-8',
+            input=input_data,
+            timeout=5
         )
-        stdout, stderr = process.communicate(input=input_data, timeout=5)
-
-        # 检查 returncode，非零则判断为失败
+        stdout = process.stdout.strip()
+        stderr = process.stderr.strip()
+        
+        # 允许某些非零退出码通过 (例如 grep, userdel -r)
         if process.returncode != 0:
-            # 忽略一些预期的非致命错误
             if 'already exists' in stderr or 'No chain/target/match' in stderr or 'user not found' in stderr or 'no such process' in stderr:
-                return True, stdout.strip()
+                return True, stdout
             
             # 如果是其他非零返回码，返回失败
-            return False, stderr.strip() or f"Command failed with code {process.returncode}"
+            return False, stderr or f"Command failed with code {process.returncode}"
         
         # 成功执行
-        return True, stdout.strip()
+        return True, stdout
         
     except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait()
         return False, "Command timed out"
     except FileNotFoundError:
         return False, f"Command not found: {command[0]}"
@@ -181,6 +193,7 @@ def safe_run_command(command, input_data=None):
         return False, f"Execution error: {str(e)}"
 
 def get_user(username):
+# [Immersive content redacted for brevity.]
     users = load_users()
     for i, user in enumerate(users):
         if user.get('username') == username: return user, i
@@ -188,11 +201,13 @@ def get_user(username):
 
 def get_user_uid(username):
     """获取用户的 UID。"""
+# [Immersive content redacted for brevity.]
     success, output = safe_run_command([shutil.which('id') or '/usr/bin/id', '-u', username])
     return int(output) if success and output.isdigit() else None
 
 def get_service_status(service):
     """检查 systemd 服务的状态。"""
+# [Immersive content redacted for brevity.]
     try:
         success, output = safe_run_command([shutil.which('systemctl') or '/bin/systemctl', 'is-active', service])
         return 'running' if success and output.strip() == 'active' else 'failed'
@@ -201,11 +216,11 @@ def get_service_status(service):
 
 def get_port_status(port):
     """检查端口是否处于 LISTEN 状态 (使用 ss 命令)"""
+# [Immersive content redacted for brevity.]
     try:
         ss_bin = shutil.which('ss') or '/bin/ss'
         # Check for both TCP and UDP
         success_tcp, output_tcp = safe_run_command([ss_bin, '-tuln'])
-        # 使用正则表达式精确匹配端口号，防止 80 匹配到 8080
         if success_tcp and re.search(fr'(:{re.escape(str(port))})\s', output_tcp):
             return 'LISTEN'
         return 'FAIL'
@@ -214,6 +229,7 @@ def get_port_status(port):
         
 def get_service_logs(service_name, lines=50):
     """获取指定服务的 journalctl 日志。"""
+# [Immersive content redacted for brevity.]
     try:
         command = [shutil.which('journalctl') or '/bin/journalctl', '-u', service_name, f'-n', str(lines), '--no-pager', '--utc']
         success, output = safe_run_command(command)
@@ -223,12 +239,15 @@ def get_service_logs(service_name, lines=50):
 
 def kill_user_sessions(username):
     """终止给定用户名的所有活跃 SSH 会话。"""
+# [Immersive content redacted for brevity.]
     safe_run_command([shutil.which('pkill') or '/usr/bin/pkill', '-u', username])
 
 def manage_ip_iptables(ip, action, chain_name=BLOCK_CHAIN):
+# [Immersive content redacted for brevity.]
     """在指定链中添加或移除 IP 阻断规则，并保存规则。"""
     if action == 'check':
         check_cmd = [shutil.which('iptables') or '/sbin/iptables', '-C', chain_name, '-s', ip, '-j', 'DROP']
+        # subprocess.run handles the return code, 0 is success (rule exists)
         result = subprocess.run(check_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=2)
         return result.returncode == 0, "Check complete."
 
@@ -260,6 +279,7 @@ def manage_ip_iptables(ip, action, chain_name=BLOCK_CHAIN):
 # --- 流量管控 (Quota/Rate Limit) 逻辑 (性能优化) ---
 
 def manage_quota_iptables_rule(username, uid, action='add', quota_limit_bytes=0):
+# [Immersive content redacted for brevity.]
     """管理用户的 IPTables 流量配额和计数规则。"""
     comment = f"WSS_QUOTA_{username}"
     # 定义基础规则，用于匹配和清除
@@ -322,6 +342,7 @@ def manage_quota_iptables_rule(username, uid, action='add', quota_limit_bytes=0)
 
 
 def get_user_current_usage_bytes(username, uid):
+# [Immersive content redacted for brevity.]
     """【性能优化】从 IPTables QUOTA_CHAIN 中获取用户的当前流量使用量（字节）。"""
     comment = f"WSS_QUOTA_{username}"
     # 获取计数：使用 -Lnvx，只列出匹配到的规则。
@@ -334,7 +355,6 @@ def get_user_current_usage_bytes(username, uid):
     if not success: return 0
     
     # 正则表达式匹配 QUOTA_CHAIN 中带有指定 COMMENT 的规则 (查找 bytes 字段)
-    # 匹配行首可选空格，接着是 packets，接着是 bytes (组 1)，接着是其他
     pattern = re.compile(r'^\s*\s*\d+\s+(\d+).*COMMENT\s+--\s+.*' + re.escape(comment))
     for line in output.split('\n'):
         match = pattern.search(line)
@@ -346,6 +366,7 @@ def get_user_current_usage_bytes(username, uid):
     
 def reset_iptables_counters(username):
     """重置指定用户名的 IPTables 计数器。"""
+# [Immersive content redacted for brevity.]
     comment = f"WSS_QUOTA_{username}"
     # 使用 -Z (Zero) 命令重置计数器
     command = [shutil.which('iptables') or '/sbin/iptables', '-t', 'filter', '-Z', QUOTA_CHAIN, '-m', 'comment', '--comment', comment]
@@ -354,7 +375,8 @@ def reset_iptables_counters(username):
 
 def apply_rate_limit(uid, rate_kbps):
     """使用 Traffic Control (tc) 实现用户的下载带宽限制。"""
-    # ... (从原脚本中移植，确保使用 shutil.which 查找命令) ...
+# [Immersive content redacted for brevity.]
+    # ... (与原脚本中的 apply_rate_limit 逻辑相同，但已移至 Python，避免 Bash 注入问题) ...
     
     # NEW: Robustly determine primary network device using pure Python/subprocess logic
     success, output = safe_run_command(['ip', 'route', 'show', 'default'])
@@ -378,7 +400,7 @@ def apply_rate_limit(uid, rate_kbps):
 
     # IPTables command parts to delete the specific rule
     # Added --wait option for stability
-    ipt_del_cmd = [shutil.which('iptables') or '/sbin/iptables', '-t', 'mangle', '-D', 'POSTROUTING', 
+    ipt_del_cmd = ['iptables', '-t', 'mangle', '-D', 'POSTROUTING', 
                    '-m', 'owner', '--uid-owner', str(uid), 
                    '-j', 'MARK', '--set-mark', str(mark),
                    '--wait']
@@ -389,9 +411,8 @@ def apply_rate_limit(uid, rate_kbps):
         # --- 1. CLEANUP (Critical for reliability) ---
         safe_run_command(ipt_del_cmd)
         # Delete TC filter and class (order matters: filter before class)
-        tc_bin = shutil.which('tc') or '/sbin/tc'
-        safe_run_command([tc_bin, 'filter', 'del', 'dev', dev, 'parent', '1:', 'protocol', 'ip', 'prio', '100', 'handle', str(mark), 'fw']) # Added 'fw' to specify the filter type
-        safe_run_command([tc_bin, 'class', 'del', 'dev', dev, 'parent', '1:', 'classid', tc_handle])
+        safe_run_command(['tc', 'filter', 'del', 'dev', dev, 'parent', '1:', 'protocol', 'ip', 'prio', '100', 'handle', str(mark), 'fw']) # Added 'fw' to specify the filter type
+        safe_run_command(['tc', 'class', 'del', 'dev', dev, 'parent', '1:', 'classid', tc_handle])
 
 
         if rate > 0:
@@ -400,7 +421,7 @@ def apply_rate_limit(uid, rate_kbps):
             rate_str = f"{rate_kbit}kbit" 
             
             # --- 2. ADD TC CLASS (Bandwidth limit container) ---
-            tc_class_cmd = [tc_bin, 'class', 'add', 'dev', dev, 'parent', '1:', 'classid', tc_handle, 'htb', 'rate', rate_str, 'ceil', rate_str]
+            tc_class_cmd = ['tc', 'class', 'add', 'dev', dev, 'parent', '1:', 'classid', tc_handle, 'htb', 'rate', rate_str, 'ceil', rate_str]
             
             success_class, output_class = safe_run_command(tc_class_cmd)
             if not success_class:
@@ -408,23 +429,23 @@ def apply_rate_limit(uid, rate_kbps):
 
             # --- 3. ADD IPTABLES RULE (Mark packets from this UID) ---
             # Added --wait option for stability
-            iptables_add_cmd = [shutil.which('iptables') or '/sbin/iptables', '-t', 'mangle', '-A', 'POSTROUTING', 
-                                 '-m', 'owner', '--uid-owner', str(uid), 
-                                 '-j', 'MARK', '--set-mark', str(mark),
-                                 '--wait']
+            iptables_add_cmd = ['iptables', '-t', 'mangle', '-A', 'POSTROUTING', 
+                                     '-m', 'owner', '--uid-owner', str(uid), 
+                                     '-j', 'MARK', '--set-mark', str(mark),
+                                     '--wait']
 
             success_ipt, output_ipt = safe_run_command(iptables_add_cmd)
             if not success_ipt:
-                safe_run_command([tc_bin, 'class', 'del', 'dev', dev, 'parent', '1:', 'classid', tc_handle])
+                safe_run_command(['tc', 'class', 'del', 'dev', dev, 'parent', '1:', 'classid', tc_handle])
                 return False, f"IPTables error: {output_ipt}"
 
             # --- 4. ADD TC FILTER (Match firewall mark) ---
-            tc_filter_cmd = [tc_bin, 'filter', 'add', 'dev', dev, 'parent', '1:', 'protocol', 'ip', 
+            tc_filter_cmd = ['tc', 'filter', 'add', 'dev', dev, 'parent', '1:', 'protocol', 'ip', 
                              'prio', '100', 'handle', str(mark), 'fw', 'flowid', tc_handle]
             
             success_filter, output_filter = safe_run_command(tc_filter_cmd)
             if not success_filter:
-                safe_run_command([tc_bin, 'class', 'del', 'dev', dev, 'parent', '1:', 'classid', tc_handle])
+                safe_run_command(['tc', 'class', 'del', 'dev', dev, 'parent', '1:', 'classid', tc_handle])
                 safe_run_command(ipt_del_cmd)
                 return False, f"TC Filter error: {output_filter}"
                 
@@ -439,12 +460,62 @@ def apply_rate_limit(uid, rate_kbps):
 
 def get_user_active_connections(username):
     """【新逻辑】获取指定用户的活跃 SSHD 会话数量 (使用 pgrep)。"""
+# [Immersive content redacted for brevity.]
     # 简化：仅返回 SSHD 进程数量
     success, output = safe_run_command([shutil.which('pgrep') or '/usr/bin/pgrep', '-c', '-u', username, 'sshd'])
     return int(output) if success and output.isdigit() else 0
 
 
+def get_user_active_sessions_info(username):
+    """
+    【基于日志的关联】通过匹配 WSS 日志，来获取用户的客户端 IP。
+    (与原脚本逻辑相同，依赖 WSS_LOG_FILE)
+    """
+# [Immersive content redacted for brevity.]
+    INTERNAL_PORT_STR = str(INTERNAL_FORWARD_PORT)
+    
+    user_pids = get_user_sshd_pids(username)
+    
+    # 活跃连接的启发式判断：如果 SSHD 进程数量为 0，则无需查找 IP
+    if not user_pids:
+        return {'sshd_pids': [], 'active_ips': []}
+        
+    active_ips = set()
+    
+    if os.path.exists(WSS_LOG_FILE):
+        try:
+            # 1. 读取最近 200 行 WSS 日志
+            command_tail = [shutil.which('tail') or '/usr/bin/tail', '-n', '200', WSS_LOG_FILE]
+            success_tail, log_output = safe_run_command(command_tail)
+            
+            # 2. 从日志中提取 IPs
+            if success_tail:
+                # 正则表达式匹配日志格式: [TIMESTAMP] [CONN_START] CLIENT_IP=X.X.X.X ...
+                log_pattern = re.compile(r'CLIENT_IP=(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})')
+                ips_from_log = set(log_pattern.findall(log_output))
+                
+                # 3. 获取当前全局活跃的 ESTAB IP 列表
+                global_active_ips = set(item['ip'] for item in get_all_active_external_ips() if not item['is_banned'])
+                
+                # 4. 关联：返回那些既在日志中出现过，又在当前全局 ESTAB 列表中的 IP
+                correlated_ips = ips_from_log.intersection(global_active_ips)
+                
+                # 5. 格式化输出
+                for ip in correlated_ips:
+                    is_banned = manage_ip_iptables(ip, 'check')[0]
+                    active_ips.add(json.dumps({'ip': ip, 'is_banned': is_banned}))
+                    
+        except Exception as e:
+            print(f"Error during log-based IP association: {e}", file=sys.stderr)
+            pass
+
+    # 格式化 IP 列表
+    ip_list = [json.loads(s) for s in active_ips]
+    
+    return {'sshd_pids': user_pids, 'active_ips': ip_list}
+
 def get_user_sshd_pids(username):
+# [Immersive content redacted for brevity.]
     """获取指定用户的活跃 SSHD 进程 ID 列表。"""
     success, output = safe_run_command([shutil.which('pgrep') or '/usr/bin/pgrep', '-u', username, 'sshd'])
     if success and output:
@@ -452,6 +523,7 @@ def get_user_sshd_pids(username):
     return []
 
 def get_all_active_external_ips():
+# [Immersive content redacted for brevity.]
     """
     获取连接到 WSS/Stunnel 端口的所有外部客户端 IP。
     """
@@ -504,53 +576,9 @@ def get_all_active_external_ips():
         })
     return ip_list
 
-def get_user_active_sessions_info(username):
-    """
-    【基于日志的关联】通过匹配 WSS 日志，来获取用户的客户端 IP。
-    """
-    
-    user_pids = get_user_sshd_pids(username)
-    
-    # 活跃连接的启发式判断：如果 SSHD 进程数量为 0，则无需查找 IP
-    if not user_pids:
-        return {'sshd_pids': [], 'active_ips': []}
-        
-    active_ips = set()
-    
-    if os.path.exists(WSS_LOG_FILE):
-        try:
-            # 1. 读取最近 200 行 WSS 日志
-            command_tail = [shutil.which('tail') or '/usr/bin/tail', '-n', '200', WSS_LOG_FILE]
-            success_tail, log_output = safe_run_command(command_tail)
-            
-            # 2. 从日志中提取 IPs
-            if success_tail:
-                # 正则表达式匹配日志格式: [TIMESTAMP] [CONN_START] CLIENT_IP=X.X.X.X ...
-                log_pattern = re.compile(r'CLIENT_IP=(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})')
-                ips_from_log = set(log_pattern.findall(log_output))
-                
-                # 3. 获取当前全局活跃的 ESTAB IP 列表
-                global_active_ips = set(item['ip'] for item in get_all_active_external_ips() if not item['is_banned'])
-                
-                # 4. 关联：返回那些既在日志中出现过，又在当前全局 ESTAB 列表中的 IP
-                correlated_ips = ips_from_log.intersection(global_active_ips)
-                
-                # 5. 格式化输出
-                for ip in correlated_ips:
-                    is_banned = manage_ip_iptables(ip, 'check')[0]
-                    active_ips.add(json.dumps({'ip': ip, 'is_banned': is_banned}))
-                    
-        except Exception as e:
-            print(f"Error during log-based IP association: {e}", file=sys.stderr)
-            pass
-
-    # 格式化 IP 列表
-    ip_list = [json.loads(s) for s in active_ips]
-    
-    return {'sshd_pids': user_pids, 'active_ips': ip_list}
-
 
 def sync_user_status(user):
+# [Immersive content redacted for brevity.]
     """同步用户状态到系统并应用 TC/IPTables 规则。"""
     username = user['username']
     uid = get_user_uid(username)
@@ -605,7 +633,7 @@ def sync_user_status(user):
     # --- 规则同步 (始终确保规则状态与配额匹配) ---
     apply_rate_limit(uid, user.get('rate_limit_kbps', '0'))
     
-    # 只有当用户状态不为 'exceeded' 时，才应该添加 quota RETURN 规则，否则流量会被 DROP
+    # 只有当用户状态不为 'exceeded' 时，才应该添加 quota 规则，防止用户继续使用（通过 iptables DROP 规则实现）
     if user['status'] != 'exceeded' and quota_limit_bytes > 0:
         manage_quota_iptables_rule(username, uid, 'add', quota_limit_bytes)
     elif user['status'] != 'exceeded' and quota_limit_bytes == 0:
@@ -622,6 +650,7 @@ def sync_user_status(user):
     return user
 
 def refresh_all_user_status(users):
+# [Immersive content redacted for brevity.]
     """刷新所有用户的状态，并返回统计数据。"""
     updated_users = []
     total_traffic = 0
@@ -673,7 +702,9 @@ def refresh_all_user_status(users):
 
 def render_dashboard():
     """手动读取 HTML 文件并进行 Jinja2 渲染。"""
+# [Immersive content redacted for brevity.]
     try:
+        # 这里使用硬编码的路径，因为 Bash 脚本已经替换了该文件
         with open(PANEL_HTML_PATH, 'r', encoding='utf-8') as f:
             html_content = f.read()
     except FileNotFoundError:
@@ -698,10 +729,13 @@ def render_dashboard():
 
 # --- Web 路由 ---
 
-# 页面路由（需要登录保护）
 @app.route('/', methods=['GET'])
-@login_required
 def dashboard():
+    # FIX: 直接调用 login_required 装饰器的 decorated 函数名
+    return decorated_dashboard() 
+
+@login_required
+def decorated_dashboard():
     html_content, status_code = render_dashboard()
     return make_response(html_content, status_code)
 
@@ -729,14 +763,15 @@ def login():
                     # 如果不是 bcrypt 格式，可能为旧的 SHA256/crypt，进行回退校验
                     pass
             
+            # 修复 NameError: HAS_CRYPT 现在保证已定义
             if not authenticated and HAS_CRYPT and root_hash.startswith('$'):
-                # 尝试 crypt 验证（通常是 $6$ 或 $5$ 开头的）
-                try:
-                    if crypt.crypt(password_raw, root_hash) == root_hash:
-                        authenticated = True
-                        print("Warning: Logged in with crypt hash.", file=sys.stderr)
-                except Exception:
-                    pass
+                 # 尝试 crypt 验证（通常是 $6$ 或 $5$ 开头的）
+                 try:
+                     if crypt.crypt(password_raw, root_hash) == root_hash:
+                         authenticated = True
+                         print("Warning: Logged in with crypt hash.", file=sys.stderr)
+                 except Exception:
+                     pass
 
             if not authenticated and len(root_hash) == 64:
                 # 尝试 SHA256 校验 (如果 hash 长度匹配且之前都没有通过)
@@ -749,7 +784,7 @@ def login():
                 session['logged_in'] = True
                 session['username'] = ROOT_USERNAME
                 log_action("LOGIN_SUCCESS", ROOT_USERNAME, "Web UI Login")
-                return redirect(url_for('dashboard'))
+                return redirect(url_for('decorated_dashboard'))
             else:
                 error = '用户名或密码错误。'
                 log_action("LOGIN_FAILED", username, "Wrong credentials")
@@ -757,7 +792,7 @@ def login():
             error = '用户名或密码错误。'
             log_action("LOGIN_FAILED", username, "Invalid username attempt")
 
-    html = f"""
+        html = f"""
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -787,6 +822,8 @@ def login():
             <label for="password"><b>密码</b></label>
             <input type="password" placeholder="输入密码" name="password" required autofocus>
             
+            <!-- P6 修复：增加 autofocus 属性 -->
+
             <button type="submit">登录</button>
         </form>
     </div>
@@ -797,6 +834,7 @@ def login():
 
 @app.route('/logout')
 def logout():
+# [Immersive content redacted for brevity.]
     log_action("LOGOUT_SUCCESS", session.get('username', 'root'), "Web UI Logout")
     session.pop('logged_in', None)
     return redirect(url_for('login'))
@@ -806,6 +844,7 @@ def logout():
 @app.route('/api/system/status', methods=['GET'])
 @login_required
 def get_system_status():
+# [Immersive content redacted for brevity.]
     try:
         cpu_percent = psutil.cpu_percent(interval=None)
         mem = psutil.virtual_memory()
@@ -842,6 +881,7 @@ def get_system_status():
 @app.route('/api/system/control', methods=['POST'])
 @login_required
 def control_system_service():
+# [Immersive content redacted for brevity.]
     data = request.json
     service = data.get('service')
     action = data.get('action')
@@ -858,6 +898,7 @@ def control_system_service():
 @app.route('/api/system/logs', methods=['POST'])
 @login_required
 def get_service_logs_api():
+# [Immersive content redacted for brevity.]
     service_name = request.json.get('service')
     if service_name not in CORE_SERVICES: return jsonify({"success": False, "message": "无效的服务名称。"}), 400
     logs = get_service_logs(service_name)
@@ -866,6 +907,7 @@ def get_service_logs_api():
 @app.route('/api/system/audit_logs', methods=['GET'])
 @login_required
 def get_audit_logs_api():
+# [Immersive content redacted for brevity.]
     # FIX P8: 确保这个 API 返回审计日志
     logs = get_recent_audit_logs(20)
     return jsonify({"success": True, "logs": logs})
@@ -873,6 +915,7 @@ def get_audit_logs_api():
 @app.route('/api/system/active_ips', methods=['GET'])
 @login_required
 def get_system_active_ips_api():
+# [Immersive content redacted for brevity.]
     """返回连接到 WSS/Stunnel 端口的所有外部客户端 IP 列表。"""
     ip_list = get_all_active_external_ips()
     if isinstance(ip_list, dict) and 'error' in ip_list:
@@ -883,6 +926,7 @@ def get_system_active_ips_api():
 @app.route('/api/users/list', methods=['GET'])
 @login_required
 def get_users_list_api():
+# [Immersive content redacted for brevity.]
     users, _ = refresh_all_user_status(load_users())
     # 活跃连接数和模拟速度已在 sync_user_status 中计算并存入 user 对象
     save_users(users)
@@ -891,6 +935,7 @@ def get_users_list_api():
 @app.route('/api/users/add', methods=['POST'])
 @login_required
 def add_user_api():
+# [Immersive content redacted for brevity.]
     data = request.json
     username = data.get('username')
     password_raw = data.get('password')
@@ -957,6 +1002,7 @@ def add_user_api():
 @app.route('/api/users/delete', methods=['POST'])
 @login_required
 def delete_user_api():
+# [Immersive content redacted for brevity.]
     data = request.json
     username = data.get('username')
     if not username: return jsonify({"success": False, "message": "缺少用户名"}), 400
@@ -983,6 +1029,7 @@ def delete_user_api():
 @app.route('/api/users/status', methods=['POST'])
 @login_required
 def toggle_user_status_api():
+# [Immersive content redacted for brevity.]
     data = request.json
     username = data.get('username')
     action = data.get('action')
@@ -1003,14 +1050,15 @@ def toggle_user_status_api():
     # 如果状态被手动更改，则需要同步系统状态
     if old_status != users[index]['status']:
         users[index] = sync_user_status(users[index])
-    save_users(users)
-    kill_user_sessions(username)
-        
+        save_users(users)
+        kill_user_sessions(username)
+    
     return jsonify({"success": True, "message": f"用户组 {username} 状态已更新为 {action}，连接已断开。"})
 
 @app.route('/api/users/set_settings', methods=['POST'])
 @login_required
 def update_user_settings_api():
+# [Immersive content redacted for brevity.]
     data = request.json
     username = data.get('username')
     expiry_date = data.get('expiry_date', '')
@@ -1066,6 +1114,7 @@ def update_user_settings_api():
 @app.route('/api/users/kill_all', methods=['POST'])
 @login_required
 def kill_all_user_sessions_api():
+# [Immersive content redacted for brevity.]
     data = request.json
     username = data.get('username')
     user, _ = get_user(username)
@@ -1077,6 +1126,7 @@ def kill_all_user_sessions_api():
 @app.route('/api/users/reset_traffic', methods=['POST'])
 @login_required
 def reset_user_traffic_api():
+# [Immersive content redacted for brevity.]
     data = request.json
     username = data.get('username')
     user, _ = get_user(username)
@@ -1088,8 +1138,7 @@ def reset_user_traffic_api():
     users = load_users()
     user, index = get_user(username) # 重新获取用户
     if user:
-        users[index]['usage_gb'] = 0.0 # 强制设为 0
-        users[index] = sync_user_status(users[index])
+        users[index] = sync_user_status(user)
         save_users(users)
     
     log_action("USER_TRAFFIC_RESET", session.get('username', 'root'), f"Traffic counter for user {username} reset to 0.")
@@ -1099,6 +1148,7 @@ def reset_user_traffic_api():
 @app.route('/api/users/ip_activity', methods=['GET'])
 @login_required
 def get_user_ip_activity_api():
+# [Immersive content redacted for brevity.]
     """获取用户的 SSHD 活跃会话 IP 列表（基于 PID 关联，但已简化）。"""
     username = request.args.get('username')
     if not username: return jsonify({"success": False, "message": "缺少用户名"}), 400
@@ -1113,6 +1163,7 @@ def get_user_ip_activity_api():
 @app.route('/api/ips/ban_global', methods=['POST'])
 @login_required
 def ban_ip_global_api():
+# [Immersive content redacted for brevity.]
     data = request.json
     ip = data.get('ip')
     reason = data.get('reason', 'Manual Ban')
@@ -1132,6 +1183,7 @@ def ban_ip_global_api():
 @app.route('/api/ips/unban_global', methods=['POST'])
 @login_required
 def unban_ip_global_api():
+# [Immersive content redacted for brevity.]
     data = request.json
     ip = data.get('ip')
     if not ip: return jsonify({"success": False, "message": "缺少 IP"}), 400
@@ -1150,12 +1202,14 @@ def unban_ip_global_api():
 @app.route('/api/ips/global_list', methods=['GET'])
 @login_required
 def get_global_ban_list():
+# [Immersive content redacted for brevity.]
     ip_bans = load_ip_bans()
     return jsonify({"success": True, "global_bans": ip_bans.get('global', {})})
 
 @app.route('/api/users/ip_debug', methods=['GET'])
 @login_required
 def get_ip_debug_info():
+# [Immersive content redacted for brevity.]
     """新增的调试 API，用于获取 ss -tanp 和 WSS 日志的原始信息。"""
     username = request.args.get('username')
     
@@ -1182,12 +1236,23 @@ def get_ip_debug_info():
 
 
 if __name__ == '__main__':
+# [Immersive content redacted for brevity.]
     logging.basicConfig(level=logging.INFO)
     
-    # 打印启动信息
+    # FIX (P3): 确保所有配置都是从环境中获取的
+    os.environ['PANEL_DIR_ENV'] = PANEL_DIR
+    os.environ['WSS_LOG_FILE_ENV'] = WSS_LOG_FILE
+    os.environ['WSS_HTTP_PORT_ENV'] = WSS_HTTP_PORT
+    os.environ['WSS_TLS_PORT_ENV'] = WSS_TLS_PORT
+    os.environ['STUNNEL_PORT_ENV'] = STUNNEL_PORT
+    os.environ['UDPGW_PORT_ENV'] = UDPGW_PORT
+    os.environ['INTERNAL_FORWARD_PORT_ENV'] = INTERNAL_FORWARD_PORT
+    os.environ['PANEL_PORT_ENV'] = PANEL_PORT
+    
     print(f"WSS Panel running on port {PANEL_PORT}")
     try:
         app.run(host='0.0.0.0', port=int(PANEL_PORT), debug=False)
     except Exception as e:
         print(f"Flask App failed to run: {e}", file=sys.stderr)
         sys.exit(1)
+    
