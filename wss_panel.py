@@ -274,8 +274,8 @@ def manage_ip_iptables(ip, action, chain_name=BLOCK_CHAIN):
 
 def manage_quota_iptables_rule(username, uid, action='add', quota_limit_bytes=0):
     """
-    【修正 v2】管理用户的 IPTables 流量配额和计数规则。
-    修复：处理 quota_limit_bytes=0 时 IPTables 报错的问题。
+    【修正 v3 - 优化清理逻辑】管理用户的 IPTables 流量配额和计数规则。
+    修复：简化暴力删除逻辑，避免因删除失败导致后续添加中断的问题。
     """
     comment = f"WSS_QUOTA_{username}"
     # 定义匹配规则
@@ -286,29 +286,44 @@ def manage_quota_iptables_rule(username, uid, action='add', quota_limit_bytes=0)
     ]
     
     # 1. 【清理】清除所有匹配到的旧规则 (避免重复添加)
-    iptables_bin = shutil.which('iptables') or '/sbin/iptables'
-    # 暴力删除匹配的规则直到失败 (没有更多规则可删)
-    try:
-        # 尝试删除所有可能的规则形态（配额RETURN, 配额DROP, 无配额RETURN）
-        for target in ['RETURN', 'DROP']:
-            while True:
-                # 尝试删除带有 quota 匹配的规则 (无论配额值是多少，用 '0' 占位尝试删除)
-                result = subprocess.run([iptables_bin, '-t', 'filter', '-D', QUOTA_CHAIN] + match_rule + ['-m', 'quota', '--quota', '0', '-j', target], capture_output=True, timeout=1, text=True)
-                if result.returncode != 0: break
-            while True:
-                # 尝试删除不带 quota 匹配的规则（无限流量的 RETURN 规则）
-                result = subprocess.run([iptables_bin, '-t', 'filter', '-D', QUOTA_CHAIN] + match_rule + ['-j', target], capture_output=True, timeout=1, text=True)
-                if result.returncode != 0: break
-    except Exception as e:
-        print(f"Warning: IPTables cleanup failed for {username}: {e}", file=sys.stderr)
-        pass # 忽略清理错误
+    # 策略：暴力删除所有可能的规则形态，直到找不到为止。
+    # 必须从 -L 命令的输出中获取行号进行删除，或者尝试所有已知的规则形态进行删除。
+    
+    # 尝试删除所有可能的旧规则形态 (最多 3 种)
+    
+    # 获取当前 QUOTA_CHAIN 的规则列表
+    list_cmd = ['iptables', '-t', 'filter', '-nL', QUOTA_CHAIN, '--line-numbers']
+    success_list, output_list = safe_run_command(list_cmd)
+    
+    if success_list:
+        lines = output_list.split('\n')
+        # 从后往前遍历，防止删除行后行号变化
+        for line in reversed(lines):
+            # 使用更宽泛的匹配来查找包含用户注释的规则
+            if comment in line:
+                # 匹配行号 (第一列数字)
+                line_number_match = re.match(r'^\s*(\d+)', line)
+                if line_number_match:
+                    line_num = line_number_match.group(1)
+                    # 尝试用行号删除规则
+                    delete_cmd = ['iptables', '-t', 'filter', '-D', QUOTA_CHAIN, line_num]
+                    # 使用 subprocess.run 而不是 safe_run_command，因为删除不存在的行会返回错误码
+                    try:
+                        subprocess.run(delete_cmd, capture_output=True, text=True, encoding='utf-8', timeout=1, check=True)
+                        print(f"Cleaned up rule {line_num} for {username}.", file=sys.stderr)
+                    except subprocess.CalledProcessError as e:
+                        # 忽略删除失败，因为这通常意味着规则已经被删除了。
+                        pass
+                    except Exception as e:
+                        # 记录其他删除错误
+                        print(f"Warning: Deletion attempt failed for rule {line_num}: {e}", file=sys.stderr)
+
 
     if action == 'add' or action == 'modify':
         
         # --- 针对无限流量 (Quota = 0) 的特殊处理 ---
         if quota_limit_bytes == 0:
             # 无限流量: 仅添加计数规则 (RETURN)，**不使用 --quota**，避免语法错误。
-            # 这条规则将匹配所有用户流量并让其通过，同时 IPTables 会进行计数。
             command_return = ['iptables', '-A', QUOTA_CHAIN] + match_rule + ['-j', 'RETURN']
             success, output = safe_run_command(command_return)
             if not success: 
@@ -325,7 +340,6 @@ def manage_quota_iptables_rule(username, uid, action='add', quota_limit_bytes=0)
                 return False, f"Quota rule setup (RETURN) failed: {output}"
             
             # 规则 2: 超出配额拒绝 (DROP) - 不使用 --quota
-            # 这条规则紧随上一条规则，当配额耗尽时，流量将落入此规则并被 DROP。
             command_drop = ['iptables', '-A', QUOTA_CHAIN] + match_rule + ['-j', 'DROP']
             success_drop, output_drop = safe_run_command(command_drop)
             if not success_drop: 
