@@ -15,7 +15,7 @@ import shutil
 import logging
 import sys
 
-# P10 FIX: 确保变量在导入尝试前被定义
+# P10 FIX: 确保变量在导入尝试前被定义，解决 NameError
 HAS_BCRYPT = False
 HAS_CRYPT = False
 
@@ -426,7 +426,7 @@ def apply_rate_limit(uid, rate_kbps):
             
             success_filter, output_filter = safe_run_command(tc_filter_cmd)
             if not success_filter:
-                safe_run_command(['tc', 'class', 'del', 'dev', 'parent', '1:', 'classid', tc_handle])
+                safe_run_command(['tc', 'class', 'del', 'dev', dev, 'parent', '1:', 'classid', tc_handle])
                 safe_run_command(ipt_del_cmd)
                 return False, f"TC Filter error: {output_filter}"
                 
@@ -705,8 +705,7 @@ def render_dashboard():
 
 @app.route('/', methods=['GET'])
 def dashboard():
-    # FIX: 直接调用 login_required 装饰器的 decorated 函数名
-    # 注意: 路由名称是 'dashboard'
+    # FIX P9: 使用正确的路由端点 'dashboard'
     return decorated_dashboard() 
 
 @login_required
@@ -738,6 +737,7 @@ def login():
                     # 如果不是 bcrypt 格式，可能为旧的 SHA256/crypt，进行回退校验
                     pass
             
+            # P10 FIX: 确保 HAS_CRYPT 已定义
             if not authenticated and HAS_CRYPT and root_hash.startswith('$'):
                     # 尝试 crypt 验证（通常是 $6$ 或 $5$ 开头的）
                     try:
