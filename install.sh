@@ -8,6 +8,7 @@ set -eu
 # ----------------------------------------------------------
 # 修正: 修复了 Flask 路由重定向错误 (P9)。
 # 修正: 修复了 HAS_CRYPT 变量未定义的 NameError (P10)。
+# 修正: 移除了 pip 对标准库 'crypt' 的冗余安装，修复了部署时的安装错误。
 # ==========================================================
 
 # =============================
@@ -91,15 +92,15 @@ apt update -y
 apt install -y python3 python3-pip wget curl git net-tools cmake build-essential openssl stunnel4 iproute2 iptables procps libffi-dev || echo "警告: 依赖安装失败，可能影响功能。"
 
 # 尝试安装 Python 库
-# 注意：尝试安装 crypt, 虽然在某些系统上它可能作为标准库存在，但最好尝试安装，以防万一。
-if pip3 install flask psutil requests uvloop bcrypt crypt; then
+# FIX: 移除 'crypt'，因为它通常是标准库的一部分，不需要通过 pip 安装。
+if pip3 install flask psutil requests uvloop bcrypt; then
     HAS_BCRYPT=1
-    echo "Python 依赖 (Flask, psutil, uvloop, bcrypt, crypt) 安装成功。"
+    echo "Python 依赖 (Flask, psutil, uvloop, bcrypt) 安装成功。"
 else
     # 尝试安装核心库
     if pip3 install flask psutil requests; then
         HAS_BCRYPT=0
-        echo "警告: uvloop/bcrypt/crypt 安装失败。性能和安全回退生效。"
+        echo "警告: uvloop/bcrypt 安装失败。性能和安全回退生效。"
     else
         echo "严重警告: 核心 Python 依赖安装失败。"
         exit 1
@@ -115,6 +116,7 @@ if [ ! -f "$ROOT_HASH_FILE" ] && [ -n "${PANEL_ROOT_PASS_RAW:-}" ]; then
     else
         # 回退到带盐的 SHA-512 crypt hash
         if command -v python3 >/dev/null; then
+            # 这里依赖的是 Python 的内建 crypt 模块
             PANEL_ROOT_PASS_HASH=$(python3 -c "import crypt, random, string; salt = '\$6\$' + ''.join(random.choices(string.ascii_letters + string.digits, k=16)); print(crypt.crypt('$PANEL_ROOT_PASS_RAW', salt))")
             echo "回退到带盐的 SHA-512 (crypt) 生成 ROOT 密码哈希。"
         else
@@ -222,7 +224,7 @@ echo "----------------------------------"
 # =============================
 echo "==== 重新部署 UDPGW ===="
 if [ ! -d "/root/badvpn" ]; then
-    git clone https://github.com/ambrop72/badvpn.git /root/badvpn > /dev/null 2>&1
+    git clone [https://github.com/ambrop72/badvpn.git](https://github.com/ambrop72/badvpn.git) /root/badvpn > /dev/null 2>&1
 fi
 mkdir -p /root/badvpn/badvpn-build
 cd /root/badvpn/badvpn-build
