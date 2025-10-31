@@ -5,7 +5,7 @@ import subprocess
 import os
 import hashlib
 import time
-import jinja2
+import jinja2 # 引入 Jinja2
 import re
 import random
 from datetime import date, timedelta, datetime
@@ -40,6 +40,7 @@ IP_BANS_DB_PATH = os.path.join(PANEL_DIR, 'ip_bans.json')
 AUDIT_LOG_PATH = os.path.join(PANEL_DIR, 'audit.log')
 ROOT_HASH_FILE = os.path.join(PANEL_DIR, 'root_hash.txt')
 PANEL_HTML_PATH = os.path.join(PANEL_DIR, 'index.html')
+LOGIN_HTML_PATH = os.path.join(PANEL_DIR, 'login.html') # 新增登录页面路径
 SECRET_KEY_PATH = os.path.join(PANEL_DIR, 'secret_key.txt')
 WSS_LOG_FILE = os.environ.get('WSS_LOG_FILE_ENV', '/var/log/wss.log')
 
@@ -767,45 +768,28 @@ def login():
             error = '用户名或密码错误。'
             log_action("LOGIN_FAILED", username, "Invalid username attempt")
 
-    html = f"""
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WSS Panel - 登录</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        body {{ font-family: sans-serif; background-color: #f4f7f6; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }}
-        .container {{ background: white; padding: 30px; border-radius: 12px; box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1); width: 100%; max-width: 400px; }}
-        h1 {{ text-align: center; color: #1f2937; margin-bottom: 30px; font-weight: 700; font-size: 24px; }}
-        input[type=text], input[type=password] {{ width: 100%; padding: 12px; margin: 10px 0; display: inline-block; border: 1px solid #d1d5db; border-radius: 8px; box-sizing: border-box; transition: all 0.3s; }}
-        input[type=text]:focus, input[type=password]:focus {{ border-color: #4f46e5; outline: 2px solid #a5b4fc; }}
-        button {{ background-color: #4f46e5; color: white; padding: 14px 20px; margin: 15px 0 5px 0; border: none; border-radius: 8px; cursor: pointer; width: 100%; font-size: 16px; font-weight: 600; transition: background-color 0.3s; }}
-        button:hover {{ background-color: #4338ca; }}
-        .error {{ color: #ef4444; background-color: #fee2e2; padding: 10px; border-radius: 6px; text-align: center; margin-bottom: 15px; font-weight: 500; border: 1px solid #fca5a5; }}
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>WSS 管理面板 V2.1</h1>
-        {f'<div class="error">{error}</div>' if error else ''}
-        <form method="POST">
-            <label for="username"><b>用户名</b></label>
-            <input type="text" placeholder="输入 {ROOT_USERNAME}" name="username" value="{ROOT_USERNAME}" required>
+    # --- 加载并渲染外部登录模板 ---
+    try:
+        # 1. 设置模板加载器：从面板目录加载
+        template_loader = jinja2.FileSystemLoader(PANEL_DIR)
+        template_env = jinja2.Environment(loader=template_loader)
+        
+        # 2. 加载 login.html (这里我们假设文件名为 login.html)
+        template = template_env.get_template('login.html')
+        
+        # 3. 渲染并返回
+        context = {
+            'ROOT_USERNAME': ROOT_USERNAME,
+            'error': error,
+        }
+        return template.render(**context), 200
+        
+    except FileNotFoundError:
+        # 如果模板文件丢失，则返回默认的 HTML 错误
+        return make_response("Error: Login template file (login.html) not found. Check deployment.", 500)
+    except Exception as e:
+        return make_response(f"Login rendering error: {str(e)}", 500)
 
-            <label for="password"><b>密码</b></label>
-            <input type="password" placeholder="输入密码" name="password" required autofocus>
-            
-            <!-- P6 修复：增加 autofocus 属性 -->
-
-            <button type="submit">登录</button>
-        </form>
-    </div>
-</body>
-</html>
-    """
-    return make_response(html)
 
 @app.route('/logout')
 def logout():
