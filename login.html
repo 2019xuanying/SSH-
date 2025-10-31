@@ -4,33 +4,84 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>WSS Panel - 登录</title>
+    <!-- 引入 Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        body { font-family: sans-serif; background-color: #f4f7f6; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
-        .container { background: white; padding: 30px; border-radius: 12px; box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1); width: 100%; max-width: 400px; }
-        h1 { text-align: center; color: #1f2937; margin-bottom: 30px; font-weight: 700; font-size: 24px; }
-        input[type=text], input[type=password] { width: 100%; padding: 12px; margin: 10px 0; display: inline-block; border: 1px solid #d1d5db; border-radius: 8px; box-sizing: border-box; transition: all 0.3s; }
-        input[type=text]:focus, input[type=password]:focus { border-color: #4f46e5; outline: 2px solid #a5b4fc; }
-        button { background-color: #4f46e5; color: white; padding: 14px 20px; margin: 15px 0 5px 0; border: none; border-radius: 8px; cursor: pointer; width: 100%; font-size: 16px; font-weight: 600; transition: background-color 0.3s; }
-        button:hover { background-color: #4338ca; }
-        .error { color: #ef4444; background-color: #fee2e2; padding: 10px; border-radius: 6px; text-align: center; margin-bottom: 15px; font-weight: 500; border: 1px solid #fca5a5; }
+        /* 使用深色背景和居中布局 */
+        body {
+            font-family: 'Inter', sans-serif;
+            background: linear-gradient(135deg, #4f46e5 0%, #1e3a8a 100%); /* 渐变蓝 */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            background: white;
+            padding: 2.5rem; /* 40px */
+            border-radius: 1.5rem; /* 24px */
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25); /* 明显阴影 */
+            width: 100%;
+            max-width: 440px;
+            animation: fadeInDown 0.5s ease-out; /* 新增进入动画 */
+        }
+        @keyframes fadeInDown {
+            from { opacity: 0; transform: translateY(-20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .input-style {
+            transition: all 0.2s;
+        }
+        .input-style:focus {
+            border-color: #4f46e5;
+            box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.3); /* 蓝色光晕 */
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>WSS 管理面板 V2.1</h1>
-        {% if error %}
-            <div class="error">{{ error }}</div>
-        {% endif %}
-        <form method="POST">
-            <label for="username"><b>用户名</b></label>
-            <input type="text" placeholder="输入 {{ ROOT_USERNAME }}" name="username" value="{{ ROOT_USERNAME }}" required>
+        <!-- 头部图标和标题 -->
+        <div class="text-center mb-8">
+            <!-- 锁形图标 (Lucide Icon Placeholder) -->
+            <svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#4f46e5" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mx-auto mb-3">
+                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+            </svg>
+            <h1 class="text-3xl font-bold text-gray-800 tracking-tight">WSS 管理面板</h1>
+            <p class="text-gray-500 mt-1">请使用管理员权限登录</p>
+        </div>
 
-            <label for="password"><b>密码</b></label>
-            <input type="password" placeholder="输入密码" name="password" required autofocus>
+        {% if error %}
+            <div class="error bg-red-100 text-red-700 p-3 rounded-lg border border-red-300 mb-6 font-medium text-center">
+                {{ error }}
+            </div>
+        {% endif %}
+
+        <form method="POST" class="space-y-6">
+            <div>
+                <label for="username" class="block text-sm font-semibold text-gray-700 mb-1">用户名</label>
+                <input type="text" placeholder="输入 {{ ROOT_USERNAME }}" name="username" value="{{ ROOT_USERNAME }}" required
+                       class="input-style w-full p-3 border border-gray-300 rounded-xl box-border"
+                       autocomplete="off" autocapitalize="off">
+            </div>
+
+            <div>
+                <label for="password" class="block text-sm font-semibold text-gray-700 mb-1">密码</label>
+                <input type="password" placeholder="输入密码" name="password" required autofocus
+                       class="input-style w-full p-3 border border-gray-300 rounded-xl box-border">
+            </div>
             
-            <button type="submit">登录</button>
+            <button type="submit" 
+                    class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 rounded-xl transition duration-300 shadow-lg shadow-indigo-500/50 transform hover:scale-[1.01] active:scale-[0.99]">
+                立即登录
+            </button>
         </form>
+
+        <p class="text-center text-xs text-gray-400 mt-8">
+            WSS Panel V2.1 - 基础设施管理
+        </p>
     </div>
 </body>
 </html>
