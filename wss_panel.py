@@ -43,7 +43,7 @@ ROOT_HASH_FILE = os.path.join(PANEL_DIR, 'root_hash.txt')
 PANEL_HTML_PATH = os.path.join(PANEL_DIR, 'index.html')
 LOGIN_HTML_PATH = os.path.join(PANEL_DIR, 'login.html') # 新增登录页面路径
 SECRET_KEY_PATH = os.path.join(PANEL_DIR, 'secret_key.txt')
-WSS_LOG_FILE = os.environ.get('WSS_LOG_FILE_ENV', '/var/log/wss.log')
+WSS_LOG_FILE = os.environ.environ.get('WSS_LOG_FILE_ENV', '/var/log/wss.log')
 
 ROOT_USERNAME = "root"
 GIGA_BYTE = 1024 * 1024 * 1024 # 1 GB in bytes
@@ -100,7 +100,10 @@ def save_data(data, path):
         print(f"Error saving {path}: {e}")
         return False
 
-def load_users(): return load_data(USER_DB_PATH, [])
+# NEW V9 FIX: 强制每次都重新加载，避免内存缓存旧数据
+def load_users(): 
+    return load_data(USER_DB_PATH, [])
+    
 def save_users(users): return save_data(users, USER_DB_PATH)
 def load_ip_bans(): return load_data(IP_BANS_DB_PATH, {})
 def save_ip_bans(ip_bans): return save_data(ip_bans, IP_BANS_DB_PATH)
@@ -290,6 +293,7 @@ def manage_quota_iptables_rule(username, uid, action='add', quota_limit_bytes=0)
     
     if success_list:
         lines = output_list.split('\n')
+        # 从后往前删除规则，以避免行号变化
         for line in reversed(lines):
             # 查找所有包含 WSS_QUOTA_<username> 注释的规则
             if comment in line:
@@ -347,24 +351,14 @@ def get_user_current_usage_bytes(username, uid):
         '-nvxL', QUOTA_CHAIN
     ]
     
-    # --- DEBUG LOGGING START ---
-    print(f"DEBUG: Attempting to read IPTables usage for {username} (UID: {uid})", file=sys.stderr)
-    # --- DEBUG LOGGING END ---
-    
     success, output = safe_run_command(command_get)
     if not success: 
         print(f"Error executing iptables to get usage for {username}: {output}", file=sys.stderr)
         return 0
     
     # 正则表达式匹配 QUOTA_CHAIN 中带有指定 COMMENT 的规则 (查找 bytes 字段)
-    # 修正正则: 匹配开头空格，pkts字段，至少一个空格，**捕获 bytes 字段**，然后任意字符直到注释
-    # ^\s*[\d]+\s+([\d]+)  -> 匹配 pkts, 匹配空格, 捕获 bytes
+    # 新正则：匹配 pkts 字段后，捕获 bytes 字段
     pattern = re.compile(r'^\s*[\d]+\s+([\d]+).*\/\*\s+' + re.escape(comment) + r'\s+\*\/')
-    
-    # --- DEBUG LOGGING START ---
-    print(f"DEBUG: IPTables -nvxL Output:\n{output}", file=sys.stderr)
-    print(f"DEBUG: Regex pattern used: {pattern.pattern}", file=sys.stderr)
-    # --- DEBUG LOGGING END ---
     
     # 关键：由于现在只有一条 RETURN 规则用于计数，我们只需获取它的计数即可。
     for line in output.split('\n'):
@@ -372,17 +366,12 @@ def get_user_current_usage_bytes(username, uid):
         if match:
             try: 
                 usage = int(match.group(1))
-                print(f"DEBUG: Found and parsed usage for {username}: {usage} bytes", file=sys.stderr)
                 # 因为只添加了一条规则，所以直接返回找到的第一个计数
                 return usage
             except (IndexError, ValueError): 
                 # 解析失败，可能是格式不匹配
-                print(f"DEBUG: Failed to parse bytes from matched line: {line}", file=sys.stderr)
                 continue 
-        elif line.strip() != "":
-             # 打印未匹配的非空行，帮助我们理解 IPTables 输出的格式
-             print(f"DEBUG: Line did not match pattern: {line}", file=sys.stderr)
-
+    
     # 如果找不到匹配规则，返回 0
     return 0
 
@@ -600,10 +589,13 @@ def get_all_active_external_ips():
 def sync_user_status(user):
     """同步用户状态到系统并应用 TC/IPTables 规则。"""
     username = user['username']
+    # 复制用户对象，用于对比是否需要保存
+    original_user = user.copy()
+    
     uid = get_user_uid(username)
     if uid is None:
         user['status'] = 'deleted'
-        return user
+        return user, True
     
     is_expired = False
     
@@ -655,62 +647,76 @@ def sync_user_status(user):
     
     # 【关键修正】：无论用户是否超额或被暂停，都应该**尝试添加**计数和限制规则
     # manage_quota_iptables_rule 的内部逻辑会处理是添加 RETURN/DROP 还是只添加 RETURN。
-    if user['status'] == 'exceeded':
-        # 如果超额，我们调用 manage_quota_iptables_rule，强制其根据配置的配额（>0）或无限配额（=0）来添加规则
-        # 如果配额是 > 0，则会添加 DROP 规则。
-        manage_quota_iptables_rule(username, uid, 'add', quota_limit_bytes)
-    else:
-        # 正常或暂停状态，根据面板配置的配额添加规则
-        manage_quota_iptables_rule(username, uid, 'add', quota_limit_bytes)
-        
+    manage_quota_iptables_rule(username, uid, 'add', quota_limit_bytes)
+
     # --- 活跃连接和流量分配 (面板显示) ---
     active_conns = get_user_active_connections(username)
     user['active_connections'] = active_conns
     user['realtime_speed'] = random.randint(300, 700) * active_conns # 模拟实时速度
     
-    return user
+    # NEW V9 FIX: 检查核心数据是否发生变化，如果变化，则返回需要更新的标志
+    # 检查 usage_gb 和 status 是否改变 (使用 str(usage_gb) 避免浮点数比较误差)
+    usage_changed = str(original_user.get('usage_gb')) != str(user['usage_gb'])
+    status_changed = original_user.get('status') != user['status']
+    
+    return user, usage_changed or status_changed
+
 
 def refresh_all_user_status(users):
     """刷新所有用户的状态，并返回统计数据。"""
-    updated_users = []
+    updated_users_for_display = []
     total_traffic = 0
     active_count = 0
     paused_count = 0
     expired_count = 0
     
-    for user in users:
+    users_changed = False # 跟踪是否有用户数据被修改
+    
+    # NEW V9 FIX: 强制每次都重新加载，避免内存缓存旧数据
+    current_users = load_users() 
+    
+    for i, user in enumerate(current_users):
         try:
-            user = sync_user_status(user)
+            # sync_user_status 返回 (user对象, 是否有变化)
+            updated_user, changed = sync_user_status(user)
+            if changed:
+                current_users[i] = updated_user
+                users_changed = True
         except Exception as e:
             print(f"Error syncing user {user.get('username')}: {e}", file=sys.stderr)
-            continue
+            updated_user = user # 确保即使出错也有值
+            changed = False
             
-        if user['status'] == 'deleted': continue
+        if updated_user['status'] == 'deleted': continue
         
-        # 面板显示所需的字段
-        if user['status'] == 'paused':
-            user['status_text'] = "暂停 (Manual)"
-            user['status_class'] = "bg-yellow-500"
+        # 面板显示所需的字段 (使用 updated_user)
+        if updated_user['status'] == 'paused':
+            updated_user['status_text'] = "暂停 (Manual)"
+            updated_user['status_class'] = "bg-yellow-500"
             paused_count += 1
-        elif user['status'] == 'expired':
-            user['status_text'] = "已到期"
-            user['status_class'] = "bg-red-500"
+        elif updated_user['status'] == 'expired':
+            updated_user['status_text'] = "已到期"
+            updated_user['status_class'] = "bg-red-500"
             expired_count += 1
-        elif user['status'] == 'exceeded':
-            user['status_text'] = "超额 (Quota Exceeded)"
-            user['status_class'] = "bg-red-500"
+        elif updated_user['status'] == 'exceeded':
+            updated_user['status_text'] = "超额 (Quota Exceeded)"
+            updated_user['status_class'] = "bg-red-500"
             expired_count += 1
         else: # active
-            user['status_text'] = "启用 (Active)"
-            user['status_class'] = "bg-green-500"
+            updated_user['status_text'] = "启用 (Active)"
+            updated_user['status_class'] = "bg-green-500"
             active_count += 1
         
-        total_traffic += user.get('usage_gb', 0)
-        updated_users.append(user)
+        total_traffic += updated_user.get('usage_gb', 0)
+        updated_users_for_display.append(updated_user)
     
-    save_users(updated_users)
-    return updated_users, {
-        "total": len(updated_users),
+    # NEW V10 FIX: 只有当有用户数据发生变化时，才进行文件写入
+    if users_changed:
+        # 写入的是 current_users (包含更新了 usage_gb 的完整列表)
+        save_users(current_users)
+        
+    return updated_users_for_display, {
+        "total": len(updated_users_for_display),
         "active": active_count,
         "paused": paused_count,
         "expired": expired_count,
@@ -862,6 +868,7 @@ def get_system_status():
         for key, config in [('WSS_HTTP', WSS_HTTP_PORT), ('WSS_TLS', WSS_TLS_PORT), ('STUNNEL', STUNNEL_PORT), ('UDPGW', UDPGW_PORT), ('PANEL', PANEL_PORT), ('SSH_INTERNAL', INTERNAL_FORWARD_PORT)]:
             ports.append({'name': key, 'port': config, 'protocol': 'TCP' if key != 'UDPGW' else 'UDP', 'status': get_port_status(config)})
 
+        # NEW V9 FIX: 确保从文件加载最新的用户数据
         _, user_stats = refresh_all_user_status(load_users())
             
         return jsonify({
@@ -923,9 +930,9 @@ def get_system_active_ips_api():
 @app.route('/api/users/list', methods=['GET'])
 @login_required
 def get_users_list_api():
+    # NEW V9 FIX: 强制重新加载用户列表
     users, _ = refresh_all_user_status(load_users())
-    # 活跃连接数和模拟速度已在 sync_user_status 中计算并存入 user 对象
-    save_users(users)
+    # save_users(users)  <-- 在 refresh_all_user_status 内部完成
     return jsonify({"success": True, "users": users})
 
 @app.route('/api/users/add', methods=['POST'])
@@ -1042,7 +1049,8 @@ def toggle_user_status_api():
         
     # 如果状态被手动更改，则需要同步系统状态
     if old_status != users[index]['status']:
-        users[index] = sync_user_status(users[index])
+        updated_user, _ = sync_user_status(users[index])
+        users[index] = updated_user
         save_users(users)
         kill_user_sessions(username)
     
@@ -1091,7 +1099,8 @@ def update_user_settings_api():
     safe_run_command(['chage', '-E', expiry_date, username])
     
     # 同步系统状态和规则
-    users[index] = sync_user_status(users[index])
+    updated_user, _ = sync_user_status(users[index])
+    users[index] = updated_user
     
     # 重新应用配额和限速规则
     manage_quota_iptables_rule(username, uid, 'add', quota * GIGA_BYTE) # 强制更新配额规则
@@ -1128,7 +1137,8 @@ def reset_user_traffic_api():
     users = load_users()
     user, index = get_user(username) # 重新获取用户
     if user:
-        users[index] = sync_user_status(user)
+        updated_user, _ = sync_user_status(user)
+        users[index] = updated_user
         save_users(users)
     
     log_action("USER_TRAFFIC_RESET", session.get('username', 'root'), f"Traffic counter for user {username} reset to 0.")
