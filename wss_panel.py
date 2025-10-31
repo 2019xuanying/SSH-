@@ -339,41 +339,51 @@ def manage_quota_iptables_rule(username, uid, action='add', quota_limit_bytes=0)
     return True, "Quota rule cleaned up."
 
 
-def get_user_current_usage_bytes(username, uid):
+# NEW V12: 专门用于读取和清零 IPTables 计数器，保证累积流量的准确性
+def read_and_reset_iptables_counters(username, uid):
     """
-    【修正 v7 - 修复 IPTables 正则匹配】从 IPTables QUOTA_CHAIN 中获取用户的当前流量使用量（字节）。
+    读取指定用户的 IPTables 计数器值 (字节)，并立即将该计数器清零。
+    返回读取到的字节数。
     """
     comment = f"WSS_QUOTA_{username}"
-    # 获取计数：使用 -Lnvx，只列出匹配到的规则。
+    # 1. 读取计数 (使用 -nvxL)
     command_get = [
         'iptables', 
         '-t', 'filter', 
         '-nvxL', QUOTA_CHAIN
     ]
-    
     success, output = safe_run_command(command_get)
     if not success: 
         print(f"Error executing iptables to get usage for {username}: {output}", file=sys.stderr)
         return 0
     
     # 正则表达式匹配 QUOTA_CHAIN 中带有指定 COMMENT 的规则 (查找 bytes 字段)
-    # 新正则：匹配 pkts 字段后，捕获 bytes 字段
     pattern = re.compile(r'^\s*[\d]+\s+([\d]+).*\/\*\s+' + re.escape(comment) + r'\s+\*\/')
     
-    # 关键：由于现在只有一条 RETURN 规则用于计数，我们只需获取它的计数即可。
+    current_bytes = 0
     for line in output.split('\n'):
         match = pattern.search(line)
         if match:
             try: 
-                usage = int(match.group(1))
-                # 因为只添加了一条规则，所以直接返回找到的第一个计数
-                return usage
+                current_bytes = int(match.group(1))
+                break 
             except (IndexError, ValueError): 
-                # 解析失败，可能是格式不匹配
                 continue 
     
-    # 如果找不到匹配规则，返回 0
-    return 0
+    # 2. 立即清零计数器 (-Z)
+    if current_bytes > 0:
+        reset_iptables_counters(username)
+    
+    return current_bytes
+
+
+def get_user_current_usage_bytes(username, uid):
+    """
+    【废弃：改为调用 read_and_reset_iptables_counters】
+    保留此函数名称，但功能已被转移到 read_and_reset_iptables_counters
+    """
+    # 此函数已不再直接被 sync_user_status 调用，但为了兼容性保留
+    return read_and_reset_iptables_counters(username, uid)
 
     
 def reset_iptables_counters(username):
@@ -609,12 +619,18 @@ def sync_user_status(user):
     # --- 流量配额检查 ---
     quota_limit_gb = user.get('quota_gb', 0)
     quota_limit_bytes = quota_limit_gb * GIGA_BYTE
-    current_bytes = get_user_current_usage_bytes(username, uid)
-    is_over_quota = (quota_limit_gb > 0 and current_bytes >= quota_limit_bytes)
     
-    # 更新用户对象中的用量数据
+    # NEW V12: 读取自上次清零以来新增的流量，并清零 IPTables 计数器
+    delta_bytes = read_and_reset_iptables_counters(username, uid)
+    delta_gb = delta_bytes / GIGA_BYTE
+    
+    # 累加到持久化存储的流量上
+    user['usage_gb'] = user.get('usage_gb', 0.0) + delta_gb
+    
     # 【V8 修正】将四舍五入精度从 2 位提高到 4 位
-    user['usage_gb'] = round(current_bytes / GIGA_BYTE, 4)
+    user['usage_gb'] = round(user['usage_gb'], 4)
+    
+    is_over_quota = (quota_limit_gb > 0 and user['usage_gb'] >= quota_limit_gb)
 
     # 账户应被锁定的条件
     should_be_locked = is_expired or is_over_quota or (user.get('status') == 'paused')
@@ -1131,13 +1147,15 @@ def reset_user_traffic_api():
     user, _ = get_user(username)
     if not user: return jsonify({"success": False, "message": f"用户组 {username} 不存在"}), 404
     
-    reset_iptables_counters(username)
-    
-    # 重新同步状态，让面板显示最新的 0 流量并解锁账户（如果被配额锁定）
+    # 在 V12 中，重置流量只需要将 JSON 文件中的 usage_gb 设为 0 即可
     users = load_users()
     user, index = get_user(username) # 重新获取用户
     if user:
-        updated_user, _ = sync_user_status(user)
+        users[index]['usage_gb'] = 0.0
+        # 同时清零 IPTables 计数器（虽然不再是累积源，但最好保持同步）
+        reset_iptables_counters(username) 
+        
+        updated_user, _ = sync_user_status(users[index])
         users[index] = updated_user
         save_users(users)
     
