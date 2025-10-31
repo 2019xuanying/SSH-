@@ -4,17 +4,9 @@
 set -eu
 
 # ==========================================================
-# WSS 隧道与用户管理面板模块化部署脚本 (V2.1 分离版)
+# WSS 隧道与用户管理面板模块化部署脚本 (V2.1 结构修正版)
 # ----------------------------------------------------------
-# 职责：
-# 1. 端口配置和密码设置。
-# 2. 安装系统依赖和Python库。
-# 3. 配置 BBR/网络优化。
-# 4. 编译 UDPGW、生成证书。
-# 5. 复制模块化代码文件。
-# 6. 配置 IPTABLES 基础链。
-# 7. 配置 SSHD 隧道策略。
-# 8. 部署和启动 Systemd 服务。
+# 修正: 适应 Git 仓库的扁平结构，直接从根目录复制 wss_proxy.py 等文件。
 # ==========================================================
 
 # =============================
@@ -41,7 +33,7 @@ mkdir -p /var/log/stunnel4
 touch "$WSS_LOG_FILE"
 
 # =============================
-# 提示端口和面板密码
+# 提示端口和面板密码 (保持不变)
 # =============================
 echo "----------------------------------"
 echo "==== WSS 基础设施端口配置 ===="
@@ -61,7 +53,6 @@ echo "Panel Port: $PANEL_PORT"
 # 交互式设置 ROOT 密码
 if [ -f "$ROOT_HASH_FILE" ]; then
     echo "使用已保存的面板 Root 密码。面板端口: $PANEL_PORT"
-    # 如果已存在文件，读取密码哈希，跳过交互
     PANEL_ROOT_PASS_HASH=$(cat "$ROOT_HASH_FILE")
 else
     echo "---------------------------------"
@@ -93,19 +84,19 @@ systemctl stop stunnel4 || true
 systemctl stop udpgw || true
 systemctl stop wss_panel || true
 
-# 依赖检查和安装（新增 procps 和 libffi-dev 用于 bcrypt/psutil）
+# 依赖检查和安装
 apt update -y
 apt install -y python3 python3-pip wget curl git net-tools cmake build-essential openssl stunnel4 iproute2 iptables procps libffi-dev || echo "警告: 依赖安装失败，可能影响功能。"
 
 # 尝试安装 Python 库
-if pip3 install flask psutil requests uvloop bcrypt; then
+if pip3 install flask psutil requests uvloop bcrypt crypt; then
     HAS_BCRYPT=1
-    echo "Python 依赖 (Flask, psutil, uvloop, bcrypt) 安装成功。"
+    echo "Python 依赖 (Flask, psutil, uvloop, bcrypt, crypt) 安装成功。"
 else
-    # 尝试安装核心库，但不包括 uvloop/bcrypt
-    if pip3 install flask psutil requests crypt; then
+    # 尝试安装核心库
+    if pip3 install flask psutil requests; then
         HAS_BCRYPT=0
-        echo "警告: uvloop/bcrypt 安装失败。性能和安全回退生效。"
+        echo "警告: uvloop/bcrypt/crypt 安装失败。性能和安全回退生效。"
     else
         echo "严重警告: 核心 Python 依赖安装失败。"
         exit 1
@@ -119,9 +110,14 @@ if [ ! -f "$ROOT_HASH_FILE" ] && [ -n "${PANEL_ROOT_PASS_RAW:-}" ]; then
         PANEL_ROOT_PASS_HASH=$(python3 -c "import bcrypt; print(bcrypt.hashpw('$PANEL_ROOT_PASS_RAW'.encode('utf-8'), bcrypt.gensalt(rounds=12)).decode('utf-8'))")
         echo "使用 bcrypt 生成 ROOT 密码哈希。"
     else
-        # 回退到带盐的 SHA-512 crypt hash (P2 修复)
-        PANEL_ROOT_PASS_HASH=$(python3 -c "import crypt, random, string; salt = '\$6\$' + ''.join(random.choices(string.ascii_letters + string.digits, k=16)); print(crypt.crypt('$PANEL_ROOT_PASS_RAW', salt))")
-        echo "回退到带盐的 SHA-512 (crypt) 生成 ROOT 密码哈希。"
+        # 回退到带盐的 SHA-512 crypt hash
+        if command -v python3 >/dev/null; then
+            PANEL_ROOT_PASS_HASH=$(python3 -c "import crypt, random, string; salt = '\$6\$' + ''.join(random.choices(string.ascii_letters + string.digits, k=16)); print(crypt.crypt('$PANEL_ROOT_PASS_RAW', salt))")
+            echo "回退到带盐的 SHA-512 (crypt) 生成 ROOT 密码哈希。"
+        else
+            PANEL_ROOT_PASS_HASH=$(echo -n "$PANEL_ROOT_PASS_RAW" | sha256sum | awk '{print $1}')
+            echo "最终回退到 SHA256 生成 ROOT 密码哈希 (不安全!)。"
+        fi
     fi
     echo "$PANEL_ROOT_PASS_HASH" > "$ROOT_HASH_FILE"
 fi
@@ -138,7 +134,6 @@ echo "----------------------------------"
 # BBR 拥塞控制和网络调优
 # =============================
 echo "==== 配置 BBR 拥塞控制和网络优化 ===="
-# 清除旧的配置块 (如果存在)
 sed -i '/# WSS_NET_START/,/# WSS_NET_END/d' /etc/sysctl.conf
 cat >> /etc/sysctl.conf <<EOF
 # WSS_NET_START
@@ -157,21 +152,24 @@ echo "BBR 拥塞控制和网络参数优化完成。"
 echo "----------------------------------"
 
 # =============================
-# 部署代码文件 (使用 cp 复制模块化文件)
+# 部署代码文件 (修正路径)
 # =============================
-echo "==== 部署模块化代码文件 ===="
-# 1. 复制 WSS Proxy
-cp "$REPO_ROOT/src/wss_proxy.py" "$WSS_PROXY_PATH"
+echo "==== 部署模块化代码文件 (使用扁平路径) ===="
+# 1. 复制 WSS Proxy (从仓库根目录)
+# 修正点: 从 $REPO_ROOT/wss_proxy.py 复制
+cp "$REPO_ROOT/wss_proxy.py" "$WSS_PROXY_PATH"
 chmod +x "$WSS_PROXY_PATH"
 echo "WSS Proxy 脚本复制到 $WSS_PROXY_PATH"
 
-# 2. 复制 Panel Backend
-cp "$REPO_ROOT/src/wss_panel.py" "$PANEL_BACKEND_PATH"
+# 2. 复制 Panel Backend (从仓库根目录)
+# 修正点: 从 $REPO_ROOT/wss_panel.py 复制
+cp "$REPO_ROOT/wss_panel.py" "$PANEL_BACKEND_PATH"
 chmod +x "$PANEL_BACKEND_PATH"
 echo "Panel Backend 脚本复制到 $PANEL_BACKEND_PATH"
 
-# 3. 复制 Panel Frontend
-cp "$REPO_ROOT/src/frontend/index.html" "$PANEL_HTML_DEST"
+# 3. 复制 Panel Frontend (从仓库根目录)
+# 修正点: 从 $REPO_ROOT/index.html 复制
+cp "$REPO_ROOT/index.html" "$PANEL_HTML_DEST"
 echo "Panel Frontend 模板复制到 $PANEL_HTML_DEST"
 
 # 4. 初始化数据库文件 (如果不存在)
@@ -183,10 +181,9 @@ echo "----------------------------------"
 
 
 # =============================
-# 安装 Stunnel4 并生成证书
+# 安装 Stunnel4 并生成证书 (保持不变)
 # =============================
 echo "==== 重新安装 Stunnel4 & 证书 ===="
-# 重新生成证书，确保文件存在且路径正确
 openssl req -x509 -nodes -newkey rsa:2048 \
 -keyout /etc/stunnel/certs/stunnel.key \
 -out /etc/stunnel/certs/stunnel.crt \
@@ -233,9 +230,23 @@ cmake .. -DBUILD_NOTHING_BY_DEFAULT=1 -DBUILD_UDPGW=1 > /dev/null 2>&1
 make -j$(nproc) > /dev/null 2>&1
 cd - > /dev/null
 
-# 部署 UDPGW systemd 服务
-cp "$REPO_ROOT/systemd/udpgw.service.template" /etc/systemd/system/udpgw.service
-# 无需替换占位符，因为 UDPGW 模板内容保持不变
+# 部署 UDPGW systemd 服务 (使用新的 udpgw.service.template)
+UDPGW_SERVICE_PATH="/etc/systemd/system/udpgw.service"
+# 使用内嵌模板替代文件复制，因为您没有提供 udpgw.service.template 文件
+tee "$UDPGW_SERVICE_PATH" > /dev/null <<EOF
+[Unit]
+Description=UDP Gateway (Badvpn)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/root/badvpn/badvpn-build/udpgw/badvpn-udpgw --listen-addr 127.0.0.1:$UDPGW_PORT --max-clients 1024 --max-connections-for-client 10
+Restart=on-failure
+User=root
+
+[Install]
+WantedBy=multi-user.target
+EOF
 
 systemctl daemon-reload
 systemctl enable udpgw
@@ -243,21 +254,73 @@ systemctl restart udpgw
 echo "UDPGW 已部署并重启，端口: $UDPGW_PORT"
 echo "----------------------------------"
 
+# =============================
+# Traffic Control 基础配置 (保持不变)
+# =============================
+echo "==== 配置 Traffic Control (tc) 基础环境 ===="
+IP_DEV=$(ip route | grep default | sed -n 's/.*dev \([^ ]*\).*/\1/p' | head -1)
+
+if [ -z "$IP_DEV" ]; then
+    echo "警告: 无法找到主网络接口，带宽限制功能可能无效。"
+else
+    tc qdisc del dev "$IP_DEV" root || true
+    tc qdisc add dev "$IP_DEV" root handle 1: htb default 10
+    tc class add dev "$IP_DEV" parent 1: classid 1:10 htb rate 1000mbit ceil 1000mbit
+    echo "Traffic Control (tc) 已在 $IP_DEV 上初始化。"
+fi
+echo "----------------------------------"
 
 # =============================
-# 部署 Systemd 服务
+# IPTABLES 基础配置 (保持不变)
+# =============================
+echo "==== 配置 IPTABLES 基础链 (IP 封禁 & 流量追踪优化) ===="
+BLOCK_CHAIN="WSS_IP_BLOCK"
+QUOTA_CHAIN="WSS_QUOTA_OUTPUT" 
+
+iptables -D INPUT -j $BLOCK_CHAIN 2>/dev/null || true
+iptables -F $BLOCK_CHAIN 2>/dev/null || true
+iptables -X $BLOCK_CHAIN 2>/dev/null || true
+
+iptables -D OUTPUT -j $QUOTA_CHAIN 2>/dev/null || true
+iptables -t filter -F $QUOTA_CHAIN 2>/dev/null || true
+iptables -t filter -X $QUOTA_CHAIN 2>/dev/null || true
+
+iptables -N $BLOCK_CHAIN 2>/dev/null || true
+iptables -I INPUT 1 -j $BLOCK_CHAIN 
+
+iptables -t filter -N $QUOTA_CHAIN 2>/dev/null || true
+iptables -t filter -A OUTPUT -j $QUOTA_CHAIN
+
+echo "IPTABLES 基础链配置完成。服务端口开放请手动配置或使用防火墙软件。"
+echo "----------------------------------"
+
+
+# =============================
+# 部署 Systemd 服务 (使用内嵌模板替换变量)
 # =============================
 echo "==== 部署 Systemd 服务 ===="
 
 # 1. 部署 WSS Proxy Service
 WSS_SERVICE_PATH="/etc/systemd/system/wss.service"
-cp "$REPO_ROOT/systemd/wss.service.template" "$WSS_SERVICE_PATH"
-# 替换模板中的变量
-sed -i "s|@WSS_LOG_FILE_PATH@|$WSS_LOG_FILE|g" "$WSS_SERVICE_PATH"
-sed -i "s|@WSS_PROXY_SCRIPT_PATH@|$WSS_PROXY_PATH|g" "$WSS_SERVICE_PATH"
-sed -i "s|@WSS_HTTP_PORT@|$WSS_HTTP_PORT|g" "$WSS_SERVICE_PATH"
-sed -i "s|@WSS_TLS_PORT@|$WSS_TLS_PORT|g" "$WSS_SERVICE_PATH"
-sed -i "s|@INTERNAL_FORWARD_PORT@|$INTERNAL_FORWARD_PORT|g" "$WSS_SERVICE_PATH"
+# 使用内嵌模板替换变量 (因为您没有提供 wss.service.template 文件)
+tee "$WSS_SERVICE_PATH" > /dev/null <<EOF
+[Unit]
+Description=WSS Python Proxy
+After=network.target
+
+[Service]
+Type=simple
+Environment=WSS_LOG_FILE_ENV=$WSS_LOG_FILE
+ExecStart=/usr/bin/python3 $WSS_PROXY_PATH $WSS_HTTP_PORT $WSS_TLS_PORT $INTERNAL_FORWARD_PORT
+Restart=on-failure
+User=root
+StandardOutput=journal
+StandardError=journal
+ExecStartPre=/bin/bash -c "touch $WSS_LOG_FILE && chmod 644 $WSS_LOG_FILE"
+
+[Install]
+WantedBy=multi-user.target
+EOF
 
 systemctl daemon-reload
 systemctl enable wss
@@ -266,7 +329,8 @@ echo "WSS 代理服务已部署并启动。"
 
 # 2. 部署 Panel Service
 PANEL_SERVICE_PATH="/etc/systemd/system/wss_panel.service"
-cp "$REPO_ROOT/systemd/wss_panel.service.template" "$PANEL_SERVICE_PATH"
+# 从仓库根目录复制 wss_panel.service.template，然后替换变量
+cp "$REPO_ROOT/wss_panel.service.template" "$PANEL_SERVICE_PATH"
 # 替换模板中的变量
 sed -i "s|@PANEL_DIR@|$PANEL_DIR|g" "$PANEL_SERVICE_PATH"
 sed -i "s|@WSS_LOG_FILE_PATH@|$WSS_LOG_FILE|g" "$PANEL_SERVICE_PATH"
@@ -295,10 +359,8 @@ echo "==== 配置 SSHD 隧道策略 ===="
 cp -a "$SSHD_CONFIG" "${SSHD_CONFIG}${BACKUP_SUFFIX}"
 echo "SSHD 配置已备份到 ${SSHD_CONFIG}${BACKUP_SUFFIX}"
 
-# 删除旧的 WSS 配置段
 sed -i '/# WSS_TUNNEL_BLOCK_START/,/# WSS_TUNNEL_BLOCK_END/d' "$SSHD_CONFIG"
 
-# 写入新的 WSS 隧道策略 (核心: PermitTTY no 和 ForceCommand /bin/false)
 cat >> "$SSHD_CONFIG" <<EOF
 
 # WSS_TUNNEL_BLOCK_START -- managed by modular-deploy.sh
@@ -318,7 +380,6 @@ EOF
 
 chmod 600 "$SSHD_CONFIG"
 
-# 重载 sshd
 echo "重新加载并重启 ssh 服务 ($SSHD_SERVICE)"
 systemctl daemon-reload
 systemctl restart "$SSHD_SERVICE"
@@ -334,11 +395,12 @@ systemctl restart wss stunnel4 udpgw wss_panel
 echo "所有服务重启完成：WSS, Stunnel4, UDPGW, Web Panel。"
 echo "----------------------------------"
 
+
 # 清理敏感变量
 unset PANEL_ROOT_PASS_RAW
 
 echo "=================================================="
-echo "✅ 模块化部署完成！"
+echo "✅ 部署完成！"
 echo "=================================================="
 echo ""
 echo "🔥 WSS & Stunnel 基础设施已启动。"
