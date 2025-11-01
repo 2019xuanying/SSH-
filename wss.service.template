@@ -5,6 +5,10 @@ After=network.target
 [Service]
 Type=simple
 
+NEW: 增加文件描述符限制，以支持高并发连接（如测速）。
+
+LimitNOFILE=65535
+
 ExecStart 传入端口参数: HTTP_PORT, TLS_PORT, INTERNAL_FORWARD_PORT
 
 Environment=WSS_LOG_FILE_ENV=@WSS_LOG_FILE_PATH@
