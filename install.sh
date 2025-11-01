@@ -13,6 +13,7 @@ set -eu
 # FIX: 修复了 UDPGW 部分的 Bash 语法错误（Markdown 链接格式）。
 # 优化: 修复 SSHD 配置，防止 SSHD 进程的流量无法被 owner 匹配，确保流量统计准确。
 # 优化: 改进 IPTABLES 持久化配置，增加安装提示。
+# NEW: 增加了系统和服务的 LimitNOFILE 限制，解决高并发断连问题。
 # ==========================================================
 
 # =============================
@@ -139,6 +140,24 @@ if [ ! -f "$SECRET_KEY_FILE" ]; then
 fi
 
 echo "----------------------------------"
+
+# =============================
+# 文件描述符限制优化 (NEW)
+# =============================
+echo "==== 配置系统文件描述符限制 ===="
+# 增加所有用户的软限制和硬限制，以支持 systemd 的 LimitNOFILE
+# 清理旧的 WSS 限制 (如果有的话)
+sed -i '/# WSS_LIMIT_START/,/# WSS_LIMIT_END/d' /etc/security/limits.conf
+
+cat >> /etc/security/limits.conf <<EOF
+# WSS_LIMIT_START
+* soft nofile 65535
+* hard nofile 65535
+# WSS_LIMIT_END
+EOF
+echo "文件描述符软/硬限制已设置为 65535。"
+echo "----------------------------------"
+
 
 # =============================
 # BBR 拥塞控制和网络调优
