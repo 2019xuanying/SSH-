@@ -276,11 +276,8 @@ def manage_ip_iptables(ip, action, chain_name=BLOCK_CHAIN):
 
     success, output = safe_run_command(command)
     
-    # ------------------------------------------------------------------
-    # 【Axiom 修复】: 注释掉高频的 iptables-save 调用
-    # 在高频刷新循环中调用 iptables-save 会导致进程挂起和资源耗尽。
-    # 规则会即时生效，持久化应该由一个单独的、低频的进程（如 systemd-persistent）处理。
-    # ------------------------------------------------------------------
+    # --- AXIOM-1 FIX: 注释掉高频的 iptables-save ---
+    # 这会防止在10秒的轮询中发生锁冲突
     # if success:
     #     # 尝试保存 IPTABLES 规则
     #     try:
@@ -295,7 +292,7 @@ def manage_ip_iptables(ip, action, chain_name=BLOCK_CHAIN):
     #     except Exception as e:
     #         print(f"Warning: Failed to save iptables rules: {e}", file=sys.stderr)
     #         pass
-    # ------------------------------------------------------------------
+    # --- END AXIOM-1 FIX ---
             
     return success, output
 
@@ -349,10 +346,9 @@ def manage_quota_iptables_rule(username, uid, action='add', quota_limit_bytes=0)
             print(f"CRITICAL ERROR: Failed to add QUOTA COUNT/RETURN rule for {username}. Error: {output}", file=sys.stderr)
             return False, f"Quota count rule failed: {output}"
         
-        # ------------------------------------------------------------------
-        # 【Axiom 修复】: 注释掉高频的 iptables-save 调用
-        # ------------------------------------------------------------------
-        # # 2. 【持久化】每次更改后尝试保存 IPTables 规则
+        # 2. 【持久化】
+        # --- AXIOM-1 FIX: 注释掉高频的 iptables-save ---
+        # 每次更改后尝试保存 IPTables 规则
         # try:
         #     iptables_save_path = shutil.which('iptables-save') or '/sbin/iptables-save'
         #     rules_v4_path = '/etc/iptables/rules.v4'
@@ -361,7 +357,7 @@ def manage_quota_iptables_rule(username, uid, action='add', quota_limit_bytes=0)
         # except Exception as e:
         #     print(f"Warning: Failed to save iptables rules after rule modification: {e}", file=sys.stderr)
         #     pass
-        # ------------------------------------------------------------------
+        # --- END AXIOM-1 FIX ---
             
         return True, "Quota rule updated. (Hard quota disabled due to iptables compatibility issues)"
         
@@ -475,7 +471,7 @@ def apply_rate_limit(uid, rate_kbps):
             
             success_class, output_class = safe_run_command(tc_class_cmd)
             if not success_class:
-                print(f"TC Class error for {username}: {output_class}", file=sys.stderr)
+                print(f"TC Class error for {uid}: {output_class}", file=sys.stderr) # AXIOM: Changed username to uid for logging
                 return False, f"TC Class error: {output_class}"
 
             # --- 3. ADD IPTABLES RULE (Mark packets from this UID) ---
@@ -487,7 +483,7 @@ def apply_rate_limit(uid, rate_kbps):
 
             success_ipt, output_ipt = safe_run_command(iptables_add_cmd)
             if not success_ipt:
-                print(f"IPTables error for {username}: {output_ipt}", file=sys.stderr)
+                print(f"IPTables error for {uid}: {output_ipt}", file=sys.stderr) # AXIOM: Changed username to uid for logging
                 safe_run_command(['tc', 'class', 'del', 'dev', dev, 'parent', '1:', 'classid', tc_handle])
                 return False, f"IPTables error: {output_ipt}"
 
@@ -497,7 +493,7 @@ def apply_rate_limit(uid, rate_kbps):
             
             success_filter, output_filter = safe_run_command(tc_filter_cmd)
             if not success_filter:
-                print(f"TC Filter error for {username}: {output_filter}", file=sys.stderr)
+                print(f"TC Filter error for {uid}: {output_filter}", file=sys.stderr) # AXIOM: Changed username to uid for logging
                 safe_run_command(['tc', 'class', 'del', 'dev', dev, 'parent', '1:', 'classid', tc_handle])
                 safe_run_command(ipt_del_cmd)
                 return False, f"TC Filter error: {output_filter}"
@@ -627,89 +623,15 @@ def get_all_active_external_ips():
     return ip_list
 
 
-# ------------------------------------------------------------------
-# 【Axiom 修复】: 新增的轻量级数据读取函数
-# ------------------------------------------------------------------
-def get_user_realtime_data(user):
-    """
-    轻量级函数：仅用于读取实时数据（流量和连接数）并更新user对象。
-    此函数不执行任何系统配置更改（如 usermod, tc, chage）。
-    返回: (user, json_changed, needs_heavy_sync)
-    """
-    username = user['username']
-    original_status = user.get('status', 'active')
-    
-    uid = get_user_uid(username)
-    if uid is None:
-        user['status'] = 'deleted'
-        return user, False, False # (user, json_changed, needs_heavy_sync)
-
-    # --- 流量检查 (与 sync_user_status 相同) ---
-    quota_limit_gb = user.get('quota_gb', 0)
-    delta_bytes = read_and_reset_iptables_counters(username, uid)
-    delta_gb = delta_bytes / GIGA_BYTE
-    
-    usage_changed = False
-    new_usage_gb = round(user.get('usage_gb', 0.0) + delta_gb, 4)
-    
-    # 使用 1e-9 (约等于 1 byte) 作为浮点数比较的阈值
-    if abs(user.get('usage_gb', 0.0) - new_usage_gb) > 1e-9: 
-        user['usage_gb'] = new_usage_gb
-        usage_changed = True
-
-    is_over_quota = (quota_limit_gb > 0 and user['usage_gb'] >= quota_limit_gb)
-
-    # --- 状态检查 (仅读取) ---
-    is_expired = False
-    if user.get('expiration_date'):
-        try:
-            expiry_dt = datetime.strptime(user['expiration_date'], '%Y-%m-%d')
-            if expiry_dt.date() < datetime.now().date(): is_expired = True
-        except ValueError: pass
-
-    system_locked = False
-    success_status, output_status = safe_run_command(['passwd', '-S', username])
-    if success_status and output_status and ' L ' in output_status: system_locked = True
-    
-    # --- 活跃连接 (仅读取) ---
-    user['active_connections'] = get_user_active_connections(username)
-    user['realtime_speed'] = random.randint(300, 700) * user['active_connections'] # 模拟速度
-
-    # --- 决定状态 ---
-    should_be_locked = is_expired or is_over_quota or (user.get('status') == 'paused')
-    
-    new_status = original_status
-    if should_be_locked:
-        if is_expired: new_status = 'expired'
-        elif is_over_quota: new_status = 'exceeded'
-        # 如果原始状态是 'paused'，则保持 'paused'
-        elif user.get('status') == 'paused': new_status = 'paused'
-        
-        # 如果状态是 'active'，但触发了超额或过期
-        if original_status == 'active' and (is_expired or is_over_quota):
-             new_status = 'expired' if is_expired else 'exceeded'
-
-    elif not should_be_locked:
-        # 如果不应该被锁定，且当前状态不是 'active'，则将其设为 'active'
-        if original_status in ['expired', 'exceeded', 'paused']:
-            new_status = 'active'
-    
-    user['status'] = new_status
-    status_changed = (original_status != new_status)
-    
-    # 决定是否需要重度同步：
-    # 1. 系统需要被锁定 (should_be_locked)，但现在是解锁的 (not system_locked)
-    # 2. 系统需要被解锁 (not should_be_locked)，但现在是锁定的 (system_locked)
-    needs_heavy_sync = (should_be_locked and not system_locked) or (not should_be_locked and system_locked)
-
-    return user, (usage_changed or status_changed), needs_heavy_sync
-# ------------------------------------------------------------------
-
-
+# --- AXIOM-1 FIX: 
+# 这是重量级的同步函数。
+# 它只应该在“必要时”（例如用户创建、修改设置或状态不匹配时）被调用
+# 它不应该在 10 秒的刷新循环中被调用。
+# ---
 def sync_user_status(user):
     """
-    【重量级函数】同步用户状态到系统并应用 TC/IPTables 规则。
-    此函数现在只应在状态不匹配时被调用。
+    【重量级】同步用户状态到系统并应用 TC/IPTables 规则。
+    此函数会执行 usermod, chage, tc, iptables 等写操作。
     """
     username = user['username']
     # 复制用户对象，用于对比是否需要保存
@@ -733,12 +655,15 @@ def sync_user_status(user):
     quota_limit_gb = user.get('quota_gb', 0)
     quota_limit_bytes = quota_limit_gb * GIGA_BYTE
     
-    # 【Axiom 修复】: 注释掉此处的流量读取
-    # 流量读取现在由 get_user_realtime_data 统一处理，并累加到 user['usage_gb']
-    # delta_bytes = read_and_reset_iptables_counters(username, uid)
-    # delta_gb = delta_bytes / GIGA_BYTE
-    # user['usage_gb'] = user.get('usage_gb', 0.0) + delta_gb
-    # user['usage_gb'] = round(user['usage_gb'], 4)
+    # NEW V12: 读取自上次清零以来新增的流量，并清零 IPTables 计数器
+    delta_bytes = read_and_reset_iptables_counters(username, uid)
+    delta_gb = delta_bytes / GIGA_BYTE
+    
+    # 累加到持久化存储的流量上
+    user['usage_gb'] = user.get('usage_gb', 0.0) + delta_gb
+    
+    # 【V8 修正】将四舍五入精度从 2 位提高到 4 位
+    user['usage_gb'] = round(user['usage_gb'], 4)
     
     is_over_quota = (quota_limit_gb > 0 and user['usage_gb'] >= quota_limit_gb)
 
@@ -767,7 +692,7 @@ def sync_user_status(user):
         user['status'] = 'active'
     elif not should_be_locked and not system_locked:
         user['status'] = 'active'
-    
+
     # --- 规则同步 (始终确保规则状态与配额匹配) ---
     apply_rate_limit(uid, user.get('rate_kbps', '0'))
     
@@ -788,15 +713,87 @@ def sync_user_status(user):
     return user, usage_changed or status_changed
 
 
-# ------------------------------------------------------------------
-# 【Axiom 修复】: 重构 refresh_all_user_status
-# ------------------------------------------------------------------
+# --- AXIOM-1 FIX: 
+# 这是新的“轻量级”读取函数。
+# 它只读取数据，不执行系统写入（usermod, tc, chage, iptables-save）。
+# 它会在 10 秒的刷新循环中被调用。
+# ---
+def get_user_realtime_data(user):
+    """
+    【轻量级】仅读取实时数据（流量、连接、锁定状态）并更新user对象。
+    此函数不执行任何系统配置更改（如 usermod, tc, chage）。
+    返回 (updated_user, json_changed, needs_heavy_sync)
+    """
+    username = user['username']
+    uid = get_user_uid(username)
+    if uid is None:
+        user['status'] = 'deleted'
+        return user, False, False # (user, "json是否需要保存", "是否需要重度同步")
+
+    # --- 流量检查 (与 sync_user_status 相同) ---
+    quota_limit_gb = user.get('quota_gb', 0)
+    delta_bytes = read_and_reset_iptables_counters(username, uid)
+    delta_gb = delta_bytes / GIGA_BYTE
+    
+    usage_changed = False
+    if delta_gb > 0:
+        new_usage_gb = round(user.get('usage_gb', 0.0) + delta_gb, 4)
+        if user['usage_gb'] != new_usage_gb:
+            user['usage_gb'] = new_usage_gb
+            usage_changed = True
+
+    is_over_quota = (quota_limit_gb > 0 and user['usage_gb'] >= quota_limit_gb)
+
+    # --- 状态检查 (仅读取) ---
+    is_expired = False
+    if user.get('expiration_date'):
+        try:
+            expiry_dt = datetime.strptime(user['expiration_date'], '%Y-%m-%d')
+            if expiry_dt.date() < datetime.now().date(): is_expired = True
+        except ValueError: pass
+
+    system_locked = False
+    success_status, output_status = safe_run_command(['passwd', '-S', username])
+    if success_status and output_status and ' L ' in output_status: system_locked = True
+    
+    # --- 活跃连接 (仅读取) ---
+    user['active_connections'] = get_user_active_connections(username)
+    user['realtime_speed'] = random.randint(300, 700) * user['active_connections'] # 模拟速度
+
+    # --- 决定状态 ---
+    old_status = user.get('status', 'active')
+    new_status = old_status
+    
+    should_be_locked = is_expired or is_over_quota or (user.get('status') == 'paused')
+    
+    if should_be_locked:
+        if is_expired: new_status = 'expired'
+        elif is_over_quota: new_status = 'exceeded'
+        elif old_status == 'paused': new_status = 'paused' # 保持手动暂停状态
+        else: new_status = 'active' # 预防性，避免意外锁定
+            
+    elif not should_be_locked:
+        new_status = 'active'
+    
+    status_changed = (old_status != new_status)
+    user['status'] = new_status
+    
+    # 【关键】决定是否需要重度同步：
+    # 1. 系统锁定状态 (system_locked) 与
+    # 2. 业务逻辑应有的状态 (should_be_locked)
+    # ...是否不匹配？
+    needs_heavy_sync = (should_be_locked and not system_locked) or (not should_be_locked and system_locked)
+
+    return user, (usage_changed or status_changed), needs_heavy_sync
+
+
+# --- AXIOM-1 FIX: 
+# 这是被修改后的主刷新函数。
+# 它现在调用“轻量级”的 get_user_realtime_data
+# 只有在“轻量级”函数报告状态不匹配时，它才调用“重量级”的 sync_user_status
+# ---
 def refresh_all_user_status(users):
-    """
-    刷新所有用户的状态，并返回统计数据。
-    此函数现在调用轻量级的 get_user_realtime_data，
-    并且只在必要时才调用重量级的 sync_user_status。
-    """
+    """【智能型】刷新所有用户的状态，并返回统计数据。"""
     updated_users_for_display = []
     total_traffic = 0
     active_count = 0
@@ -822,10 +819,9 @@ def refresh_all_user_status(users):
             if needs_heavy_sync:
                 print(f"Status mismatch for {user.get('username')}, triggering heavy sync...", file=sys.stderr)
                 # sync_user_status 现在只在必要时被调用，而不是每10秒
-                # sync_user_status 也会返回 (user, changed_flag)
-                updated_user, changed_after_heavy_sync = sync_user_status(updated_user) # sync_user_status 是你的原函数
+                updated_user, changed_heavy = sync_user_status(updated_user) # sync_user_status 是你的原函数
                 current_users[i] = updated_user
-                if changed_after_heavy_sync:
+                if changed_heavy:
                     users_changed_in_json = True # 确保同步后的状态被保存
                 
         except Exception as e:
@@ -867,7 +863,6 @@ def refresh_all_user_status(users):
         "expired": expired_count,
         "total_traffic_gb": total_traffic
     }
-# ------------------------------------------------------------------
 
 
 # --- Web 路由所需的渲染函数 ---
@@ -885,6 +880,9 @@ def render_dashboard():
     template = template_env.from_string(html_content)
 
     # 刷新所有用户状态以获取最新数据
+    # AXIOM-1 FIX: 
+    # 现在这个 refresh_all_user_status 调用是“轻量级”的，
+    # 可以在 10 秒的刷新中安全地调用。
     users, user_stats = refresh_all_user_status(load_users())
 
     context = {
@@ -1014,7 +1012,10 @@ def get_system_status():
         for key, config in [('WSS_HTTP', WSS_HTTP_PORT), ('WSS_TLS', WSS_TLS_PORT), ('STUNNEL', STUNNEL_PORT), ('UDPGW', UDPGW_PORT), ('PANEL', PANEL_PORT), ('SSH_INTERNAL', INTERNAL_FORWARD_PORT)]:
             ports.append({'name': key, 'port': config, 'protocol': 'TCP' if key != 'UDPGW' else 'UDP', 'status': get_port_status(config)})
 
-        # 【Axiom 修复】: 此处现在调用的是重构后的、轻量级的 refresh_all_user_status
+        # NEW V9 FIX: 确保从文件加载最新的用户数据
+        # AXIOM-1 FIX: 
+        # 现在这个 refresh_all_user_status 调用是“轻量级”的，
+        # 可以在 10 秒的刷新中安全地调用。
         _, user_stats = refresh_all_user_status(load_users())
             
         return jsonify({
@@ -1076,7 +1077,10 @@ def get_system_active_ips_api():
 @app.route('/api/users/list', methods=['GET'])
 @login_required
 def get_users_list_api():
-    # 【Axiom 修复】: 此处现在调用的是重构后的、轻量级的 refresh_all_user_status
+    # NEW V9 FIX: 强制重新加载用户列表
+    # AXIOM-1 FIX: 
+    # 现在这个 refresh_all_user_status 调用是“轻量级”的，
+    # 可以在 10 秒的刷新中安全地调用。
     users, _ = refresh_all_user_status(load_users())
     # save_users(users)  <-- 在 refresh_all_user_status 内部完成
     return jsonify({"success": True, "users": users})
@@ -1195,7 +1199,8 @@ def toggle_user_status_api():
         
     # 如果状态被手动更改，则需要同步系统状态
     if old_status != users[index]['status']:
-        # 【Axiom 修复】: 调用重量级的 sync_user_status 来强制同步系统状态
+        # AXIOM-1 FIX: 
+        # 调用“重量级”同步函数来执行锁定/解锁
         updated_user, _ = sync_user_status(users[index])
         users[index] = updated_user
         save_users(users)
@@ -1245,27 +1250,18 @@ def update_user_settings_api():
     # 更新系统有效期
     safe_run_command(['chage', '-E', expiry_date, username])
     
-    # 【Axiom 修复】: 调用重量级的 sync_user_status 来强制同步系统状态
+    # 同步系统状态和规则
+    # AXIOM-1 FIX: 
+    # 调用“重量级”同步函数来应用新的设置
     updated_user, _ = sync_user_status(users[index])
     users[index] = updated_user
     
-    # 重新应用配额和限速规则 (这在 sync_user_status 内部已经完成)
+    # 重新应用配额和限速规则（sync_user_status 内部已包含）
     # manage_quota_iptables_rule(username, uid, 'add', quota * GIGA_BYTE) # 强制更新配额规则
     # apply_rate_limit(uid, rate) # 强制更新限速规则
     
     save_users(users)
     
-    # 【Axiom 修复】: 在这里执行一次 iptables-save，因为这是一个手动的、低频的“重大更改”
-    try:
-        iptables_save_path = shutil.which('iptables-save') or '/sbin/iptables-save'
-        rules_v4_path = '/etc/iptables/rules.v4'
-        with open(rules_v4_path, 'w') as f:
-            subprocess.run([iptables_save_path], stdout=f, check=True, timeout=3)
-        password_log += " (IPTables rules saved)"
-    except Exception as e:
-        print(f"Warning: Failed to save iptables rules after user settings update: {e}", file=sys.stderr)
-        pass
-
     log_action("SETTINGS_UPDATE", session.get('username', 'root'),
                 f"Updated {username}: Expiry {expiry_date}, Quota {quota}GB, Rate {rate}KB/s{password_log}")
     return jsonify({"success": True, "message": f"用户 {username} 设置已更新{password_log}"})
@@ -1297,7 +1293,8 @@ def reset_user_traffic_api():
         # 同时清零 IPTables 计数器（虽然不再是累积源，但最好保持同步）
         reset_iptables_counters(username) 
         
-        # 【Axiom 修复】: 调用重量级的 sync_user_status 来强制同步系统状态
+        # AXIOM-1 FIX: 
+        # 调用“重量级”同步函数来应用（可能）的解锁
         updated_user, _ = sync_user_status(users[index])
         users[index] = updated_user
         save_users(users)
@@ -1369,17 +1366,17 @@ def ban_ip_global_api():
     save_ip_bans(ip_bans)
     success_iptables, iptables_output = manage_ip_iptables(ip, 'block', BLOCK_CHAIN)
     
-    # 【Axiom 修复】: 在手动封禁（低频操作）后，执行一次 iptables-save
-    if success_iptables:
-        try:
-            iptables_save_path = shutil.which('iptables-save') or '/sbin/iptables-save'
-            rules_v4_path = '/etc/iptables/rules.v4'
-            with open(rules_v4_path, 'w') as f:
-                subprocess.run([iptables_save_path], stdout=f, check=True, timeout=3)
-        except Exception as e:
-            print(f"Warning: Failed to save iptables rules after global ban: {e}", file=sys.stderr)
-            pass
+    # AXIOM-1 FIX: 
+    # 因为 manage_ip_iptables 不再自动保存，我们在这里手动保存一次
+    try:
+        iptables_save_path = shutil.which('iptables-save') or '/sbin/iptables-save'
+        rules_v4_path = '/etc/iptables/rules.v4'
+        with open(rules_v4_path, 'w') as f:
+            subprocess.run([iptables_save_path], stdout=f, check=True, timeout=3)
+    except Exception as e:
+        print(f"Warning: Failed to save iptables rules after global ban: {e}", file=sys.stderr)
 
+    if success_iptables:
         log_action("IP_BLOCK_GLOBAL_SUCCESS", session.get('username', 'root'), f"Globally blocked IP {ip}")
         return jsonify({"success": True, "message": f"IP {ip} 已被全局封禁 (实时生效)。"})
     else:
@@ -1398,17 +1395,17 @@ def unban_ip_global_api():
         save_ip_bans(ip_bans)
     success_iptables, iptables_output = manage_ip_iptables(ip, 'unblock', BLOCK_CHAIN)
     
-    # 【Axiom 修复】: 在手动解封（低频操作）后，执行一次 iptables-save
+    # AXIOM-1 FIX: 
+    # 因为 manage_ip_iptables 不再自动保存，我们在这里手动保存一次
+    try:
+        iptables_save_path = shutil.which('iptables-save') or '/sbin/iptables-save'
+        rules_v4_path = '/etc/iptables/rules.v4'
+        with open(rules_v4_path, 'w') as f:
+            subprocess.run([iptables_save_path], stdout=f, check=True, timeout=3)
+    except Exception as e:
+        print(f"Warning: Failed to save iptables rules after global un-ban: {e}", file=sys.stderr)
+
     if success_iptables:
-        try:
-            iptables_save_path = shutil.which('iptables-save') or '/sbin/iptables-save'
-            rules_v4_path = '/etc/iptables/rules.v4'
-            with open(rules_v4_path, 'w') as f:
-                subprocess.run([iptables_save_path], stdout=f, check=True, timeout=3)
-        except Exception as e:
-            print(f"Warning: Failed to save iptables rules after global unban: {e}", file=sys.stderr)
-            pass
-            
         log_action("IP_UNBLOCK_GLOBAL_SUCCESS", session.get('username', 'root'), f"Globally unblocked IP {ip}")
         return jsonify({"success": True, "message": f"IP {ip} 已解除全局封禁 (实时生效)。"})
     else:
